@@ -21,6 +21,14 @@ const authConfigured = Boolean(TENANT && env.AZURE_AD_CLIENT_ID && env.AZURE_AD_
 if (PROD && !env.SESSION_SECRET) { console.error("SESSION_SECRET required in production"); process.exit(1); }
 if (!authConfigured) console.warn("[auth] AZURE_AD_* not set: /auth/login returns 503; all protected routes stay locked.");
 
+// Fire-and-forget: wake the free-tier API while the user lands on the SPA.
+function wakeApi() {
+  if (!API_UPSTREAM) return;
+  fetch(`${API_UPSTREAM.replace(/\/$/, "")}/healthz`, { signal: AbortSignal.timeout(90000) })
+    .then((r) => console.log(`[wake] API /healthz ${r.status}`))
+    .catch((e) => console.warn("[wake] API wake failed:", e.message));
+}
+
 let clientPromise;
 function getClient() {
   clientPromise ??= Issuer.discover(`https://login.microsoftonline.com/${TENANT}/v2.0`).then(
@@ -86,6 +94,7 @@ app.get("/auth/callback", async (req, res, next) => {
     req.session.regenerate((err) => {
       if (err) return next(err);
       req.session.user = { email, name: c.name, oid: c.oid, tid: c.tid };
+      wakeApi();
       req.session.save((e2) => (e2 ? next(e2) : res.redirect("/")));
     });
   } catch (e) { console.error("[auth] callback failed:", e.message); page(res, 401, 'Login failed. <a href="/auth/login">Try again</a>.'); }
@@ -114,12 +123,23 @@ if (API_UPSTREAM) {
   app.use("/api", createProxyMiddleware({
     target: API_UPSTREAM,
     changeOrigin: true,
+    // Free-tier API sleeps; cold start can take 30-60s.
+    proxyTimeout: 120000,
+    timeout: 120000,
     pathRewrite: (p) => "/api" + p,
     on: {
       proxyReq: (proxyReq, req) => {
         proxyReq.removeHeader("authorization");
         proxyReq.removeHeader("cookie");
         proxyReq.setHeader("X-Overview-User", req.session.user.email);
+      },
+      error: (err, _req, res) => {
+        console.error("[proxy] upstream error:", err.code || err.message);
+        if (!res || typeof res.status !== "function" || res.headersSent) { try { res?.end?.(); } catch {} return; }
+        const cold = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "ESOCKETTIMEDOUT", "ECONNABORTED"].includes(err.code);
+        res.status(cold ? 503 : 502).json(cold
+          ? { error: { code: "API_UPSTREAM_COLD", message: "Overview API waking up; retry in a few seconds", retryable: true } }
+          : { error: { code: "API_UPSTREAM_ERROR", message: err.message, retryable: true } });
       },
     },
   }));

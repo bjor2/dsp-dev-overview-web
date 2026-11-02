@@ -41,3 +41,9 @@ UI source in `web/` is a copy of `dev-overview/ui/app`; refresh with `npm run sy
 
 ## Render
 Web Service (not Static Site), Node, Frankfurt, build `npm ci && npm run build`, start `node server/index.js`, health `/healthz`, auto-deploy `main` (see `render.yaml`). After create: set `PUBLIC_BASE_URL` and add the real URL to the Entra redirect URIs.
+
+## Free-tier cold start
+
+Both Render services (front door + `dsp-dev-overview-api`) are on the free plan and sleep when idle; the API takes ~30–60 s to wake.
+The `/api` proxy waits up to 120 s (`proxyTimeout`/`timeout`), returns `503 { error: { code: "API_UPSTREAM_COLD", retryable: true } }`
+on ECONNRESET/ETIMEDOUT/ECONNREFUSED instead of an opaque 502, and the login callback fires a background `GET ${API_UPSTREAM}/healthz` to wake the API.
