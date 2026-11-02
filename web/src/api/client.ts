@@ -12,7 +12,24 @@ export class ApiError extends Error {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Free-tier Render API sleeps; front door returns 502/503 (API_UPSTREAM_COLD) while it wakes.
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  try {
+    return await reqOnce<T>(method, path, body);
+  } catch (e) {
+    if (e instanceof ApiError && isCold(e)) {
+      await sleep(3000);
+      try { return await reqOnce<T>(method, path, body); } catch (e2) {
+        if (e2 instanceof ApiError && isCold(e2)) throw new ApiError(e2.status, "API_WAKING", "Overview API waking, retry in a few seconds…", true);
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+const isCold = (e: ApiError) => e.code === "API_UPSTREAM_COLD" || e.status === 502 || e.status === 503 || e.status === 504;
+async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await fetch(API_BASE + path, {

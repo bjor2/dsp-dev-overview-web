@@ -6,10 +6,10 @@ import { useDemo } from "./DemoContext";
 export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
   const { setDemoMode } = useDemo();
   return (
-    <div className="banner error" role="alert">
+    <div className={error.code === "API_WAKING" ? "banner demo" : "banner error"} role="alert">
       <strong>{error.code}</strong> — {error.message}
       {error.retryable && onRetry && <button onClick={onRetry}>Retry</button>}
-      {error.code === "API_UNREACHABLE" && (
+      {(error.code === "API_UNREACHABLE" || error.code === "API_WAKING") && (
         <button className="ghost" onClick={() => setDemoMode(true)} title="Local design only — not live data">Use demo data</button>
       )}
     </div>

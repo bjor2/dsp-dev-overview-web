@@ -5,7 +5,6 @@ import helmet from "helmet";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Issuer, generators } from "openid-client";
-import { createProxyMiddleware } from "http-proxy-middleware";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, "..", "web", "dist");
@@ -120,29 +119,37 @@ app.use((req, res, next) => {
 app.get("/auth/me", (req, res) => res.json(req.session.user));
 
 if (API_UPSTREAM) {
-  app.use("/api", createProxyMiddleware({
-    target: API_UPSTREAM,
-    changeOrigin: true,
-    // Free-tier API sleeps; cold start can take 30-60s.
-    proxyTimeout: 120000,
-    timeout: 120000,
-    pathRewrite: (p) => "/api" + p,
-    on: {
-      proxyReq: (proxyReq, req) => {
-        proxyReq.removeHeader("authorization");
-        proxyReq.removeHeader("cookie");
-        proxyReq.setHeader("X-Overview-User", req.session.user.email);
-      },
-      error: (err, _req, res) => {
-        console.error("[proxy] upstream error:", err.code || err.message);
-        if (!res || typeof res.status !== "function" || res.headersSent) { try { res?.end?.(); } catch {} return; }
-        const cold = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "ESOCKETTIMEDOUT", "ECONNABORTED"].includes(err.code);
-        res.status(cold ? 503 : 502).json(cold
-          ? { error: { code: "API_UPSTREAM_COLD", message: "Overview API waking up; retry in a few seconds", retryable: true } }
-          : { error: { code: "API_UPSTREAM_ERROR", message: err.message, retryable: true } });
-      },
-    },
-  }));
+  // Custom fetch proxy (replaces http-proxy-middleware) so we can retry while the free-tier API cold-starts.
+  // Mount at /api strips the prefix; we re-add it: /api/projects -> ${API_UPSTREAM}/api/projects.
+  const UP = API_UPSTREAM.replace(/\/$/, "");
+  const RETRIES = 2, TIMEOUT_MS = 120000;
+  const COLD = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "TimeoutError", "AbortError"];
+  const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host", "cookie", "authorization"]);
+  app.use("/api", express.raw({ type: () => true, limit: "5mb" }), async (req, res) => {
+    const url = UP + "/api" + req.url;
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k) && typeof v === "string") headers[k] = v;
+    headers["x-overview-user"] = req.session.user.email;
+    const hasBody = !["GET", "HEAD"].includes(req.method) && Buffer.isBuffer(req.body) && req.body.length;
+    let lastErr;
+    for (let attempt = 0; attempt <= RETRIES; attempt++) {
+      try {
+        const r = await fetch(url, { method: req.method, headers, body: hasBody ? req.body : undefined, signal: AbortSignal.timeout(TIMEOUT_MS) });
+        if (r.status === 502 && attempt < RETRIES) { lastErr = { code: "HTTP_502" }; await new Promise((ok) => setTimeout(ok, 2000)); continue; }
+        res.status(r.status);
+        r.headers.forEach((v, k) => { if (!HOP.has(k) && k !== "set-cookie") res.setHeader(k, v); });
+        return res.send(Buffer.from(await r.arrayBuffer()));
+      } catch (e) {
+        lastErr = { code: e.cause?.code || e.code || e.name, message: e.message };
+        console.warn(`[proxy] ${req.method} ${req.originalUrl} attempt ${attempt + 1} failed: ${lastErr.code}`);
+        if (attempt < RETRIES) await new Promise((ok) => setTimeout(ok, 2000));
+      }
+    }
+    const cold = lastErr.code === "HTTP_502" || COLD.includes(lastErr.code);
+    res.status(cold ? 503 : 502).json({ error: cold
+      ? { code: "API_UPSTREAM_COLD", message: "Overview API waking up; retry in a few seconds", retryable: true }
+      : { code: "API_UPSTREAM_ERROR", message: String(lastErr.message || lastErr.code), retryable: true } });
+  });
 } else {
   app.use("/api", (_req, res) => res.status(503).json({ error: "API_UPSTREAM_NOT_CONFIGURED" }));
 }

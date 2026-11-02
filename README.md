@@ -45,5 +45,5 @@ Web Service (not Static Site), Node, Frankfurt, build `npm ci && npm run build`,
 ## Free-tier cold start
 
 Both Render services (front door + `dsp-dev-overview-api`) are on the free plan and sleep when idle; the API takes ~30–60 s to wake.
-The `/api` proxy waits up to 120 s (`proxyTimeout`/`timeout`), returns `503 { error: { code: "API_UPSTREAM_COLD", retryable: true } }`
+The `/api` proxy waits up to 120 s per attempt with 2 retries on 502/ECONNRESET/ETIMEDOUT/ECONNREFUSED, returns `503 { error: { code: "API_UPSTREAM_COLD", retryable: true } }`
 on ECONNRESET/ETIMEDOUT/ECONNREFUSED instead of an opaque 502, and the login callback fires a background `GET ${API_UPSTREAM}/healthz` to wake the API.
