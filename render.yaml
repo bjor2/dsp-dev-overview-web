@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: dsp-dev-overview-web
+    runtime: node
+    region: frankfurt
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: node server/index.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AZURE_AD_TENANT_ID
+        value: c3ac4169-9d99-4eb7-b72b-bfa11f13d825 # Osilion (NOT Dahl)
+      - key: AZURE_AD_CLIENT_ID
+        sync: false
+      - key: AZURE_AD_CLIENT_SECRET
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOWED_EMAILS
+        value: bjor.byrkjedal@osilion.no
+      - key: PUBLIC_BASE_URL
+        sync: false # https://<service>.onrender.com
+      - key: API_UPSTREAM
+        sync: false # blank -> /api returns 503

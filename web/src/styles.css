@@ -1,0 +1,30 @@
+*{box-sizing:border-box}body{margin:0;font:14px/1.4 system-ui,sans-serif;background:#f6f7f9;color:#1d2330}
+.topbar{display:flex;gap:12px;align-items:center;padding:10px 18px;background:#1d2330;color:#fff}
+.brand{color:#fff;text-decoration:none;font-weight:700}.spacer{flex:1}.api-hint{opacity:.7;font-size:12px}
+main{padding:16px 20px}.page-head{display:flex;gap:12px;align-items:center}.page-head h2{margin:8px 0}
+.badge{padding:1px 8px;border-radius:10px;font-size:12px;background:#ccd}.badge.env{background:#2f80ed;color:#fff}.badge.ok{background:#27ae60;color:#fff}.badge.off{background:#999;color:#fff}
+.banner{padding:8px 12px;border-radius:6px;margin:8px 0;display:flex;gap:10px;align-items:center}
+.banner.error{background:#fde2e1;border:1px solid #e57373}.banner.demo{background:#fff3cd;border:1px solid #e0b100;margin:0}.banner.info{background:#e7f1ff}
+button{padding:4px 10px;border:1px solid #bbc;border-radius:5px;background:#fff;cursor:pointer}button.primary{background:#2f80ed;color:#fff;border-color:#2f80ed}
+button.danger{background:#d64545;color:#fff;border-color:#d64545}button.ghost{background:transparent;border-color:transparent}button:disabled{opacity:.5;cursor:default}
+.grid{border-collapse:collapse;width:100%;background:#fff}.grid th,.grid td{padding:6px 10px;border-bottom:1px solid #e3e5ea;text-align:left}
+.clickable{cursor:pointer}.clickable:hover,.sel{background:#eef4ff}.err{background:#fff2f2}.muted{color:#778;font-size:12px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#aaa}.dot.green{background:#27ae60}.dot.amber{background:#f2a900}.dot.red{background:#d64545}
+.count.hot{color:#d64545;font-weight:700}.empty{padding:24px;color:#778;text-align:center}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #ccd;margin:8px 0}.tabs a{padding:6px 14px;text-decoration:none;color:#334;cursor:pointer;border-bottom:2px solid transparent}
+.tabs a.active{border-color:#2f80ed;font-weight:600}.tabs.small a{padding:4px 10px}
+.toolbar{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}.legend{font-size:12px;color:#667}.legend i{display:inline-block;width:20px;margin:0 4px 3px 8px;border-top:2px solid #667}.l-dot{border-top-style:dotted!important}.l-dash{border-top-style:dashed!important}
+.flow-wrap{display:flex;gap:12px}.flow{background:#fff;border:1px solid #dde;border-radius:6px;flex:none}.side-panel{flex:1;min-width:240px;background:#fff;border:1px solid #dde;border-radius:6px;padding:10px}
+.node{cursor:pointer}.node rect{fill:#fff;stroke:#99a;stroke-width:1.5}.node.app rect{fill:#eaf2ff;stroke:#2f80ed}.node.topic rect{fill:#f3ecff}.node.subscription rect{fill:#f8f4ff}.node.external rect{fill:#f2f2f2;stroke-dasharray:4 3}
+.node.hot rect{stroke:#d64545;stroke-width:2.5}.node.sel rect{stroke-width:3}.t1{font-size:12px;font-weight:600}.t2{font-size:11px;fill:#667}
+.edge{fill:none;stroke:#667;stroke-width:1.5}.edge.inject{stroke:#2f80ed}.edge.inferred{stroke-dasharray:2 4}.edge.cloud{stroke-dasharray:8 5;stroke:#aab}
+.drawer-backdrop{position:fixed;inset:0;background:#0004;display:flex;justify-content:flex-end}.drawer{width:520px;max-width:100%;background:#fff;padding:14px;overflow:auto}.drawer header{display:flex;justify-content:space-between}
+.presets{list-style:none;padding:0}.presets li{padding:8px;border:1px solid #dde;border-radius:5px;margin:4px 0;cursor:pointer}.presets li.danger{border-color:#e57373}
+.picker textarea{width:100%;font-family:monospace}.props{background:#f6f7f9;padding:6px;font-size:12px}.row{display:flex;gap:8px;align-items:center;margin:8px 0}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}.msgs{padding-left:16px}
+.chip{border:1px solid #bbc;border-radius:12px;padding:2px 8px}.chip.on{background:#eaf2ff}.chip input{display:none}
+.console{background:#111;color:#ddd;height:60vh;overflow:auto;padding:10px;font-size:12px;margin:0}.console .stderr{color:#ff8a80}.console .system{color:#80d8ff}
+
+.warn-banner { background: #3d2e00; border: 1px solid #d29922; color: #f0e6c8; padding: 8px 12px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+.warn-banner ul { margin: 4px 0 0 1.2em; padding: 0; }
+.warn-banner code { font-size: 12px; }
