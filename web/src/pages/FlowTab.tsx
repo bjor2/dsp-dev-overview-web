@@ -7,36 +7,85 @@ import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner } from "../components/common";
 import SampleMessagePicker from "../components/SampleMessagePicker";
 
-/** Compact node size — keep margins tight so fit-to-view doesn't look sparse. */
-const W = 148, H = 42, GX = 36, GY = 14, PAD = 12;
+/** Dense node size + tight gutters so Fit keeps labels readable. */
+const W = 136, H = 38, GX = 18, GY = 10, PAD = 10;
 
 type PosMap = Record<string, { x: number; y: number }>;
 
-/** Longest-path layering; honours stored node.position when present. */
-function autoLayout(g: FlowGraph, edges: FlowEdge[]): PosMap {
-  const layer: Record<string, number> = Object.fromEntries(g.nodes.map((n) => [n.id, 0]));
-  for (let i = 0; i < g.nodes.length; i++)
+function computeLayers(nodes: FlowNode[], edges: FlowEdge[]): Record<string, number> {
+  const layer: Record<string, number> = Object.fromEntries(nodes.map((n) => [n.id, 0]));
+  for (let i = 0; i < nodes.length; i++)
     for (const e of edges)
       if (layer[e.from] !== undefined && layer[e.to] !== undefined && layer[e.to] < layer[e.from] + 1)
         layer[e.to] = layer[e.from] + 1;
+  return layer;
+}
+
+/** Pack every node into consecutive columns/rows — never leave empty horizontal lanes. */
+function denseAutoLayout(nodes: FlowNode[], edges: FlowEdge[]): PosMap {
+  const layer = computeLayers(nodes, edges);
   const cols: Record<number, FlowNode[]> = {};
-  g.nodes.forEach((n) => (cols[layer[n.id]] ??= []).push(n));
+  nodes.forEach((n) => (cols[layer[n.id]] ??= []).push(n));
+  // Stable order within a column for less visual jump
+  Object.values(cols).forEach((ns) => ns.sort((a, b) => a.id.localeCompare(b.id)));
+  const colIdx = Object.keys(cols).map(Number).sort((a, b) => a - b);
   const pos: PosMap = {};
-  Object.entries(cols).forEach(([c, ns]) =>
-    ns.forEach((n, i) => {
-      pos[n.id] = n.position ?? { x: PAD + +c * (W + GX), y: PAD + i * (H + GY) };
-    }),
-  );
+  colIdx.forEach((c, ci) => {
+    cols[c].forEach((n, i) => {
+      pos[n.id] = { x: PAD + ci * (W + GX), y: PAD + i * (H + GY) };
+    });
+  });
   return pos;
+}
+
+/** Collapse large X/Y gaps (e.g. partial stored positions left+right) into dense packing, preserving order. */
+function collapseGaps(pos: PosMap): PosMap {
+  const ids = Object.keys(pos);
+  if (ids.length === 0) return pos;
+  const xs = [...new Set(ids.map((id) => pos[id].x))].sort((a, b) => a - b);
+  const xMap = new Map(xs.map((x, i) => [x, PAD + i * (W + GX)]));
+  // Group by compacted column, then pack Y
+  const byCol: Record<number, string[]> = {};
+  ids.forEach((id) => {
+    const cx = xMap.get(pos[id].x)!;
+    (byCol[cx] ??= []).push(id);
+  });
+  const next: PosMap = {};
+  Object.keys(byCol)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .forEach((cx) => {
+      byCol[cx]
+        .sort((a, b) => pos[a].y - pos[b].y || a.localeCompare(b))
+        .forEach((id, i) => {
+          next[id] = { x: cx, y: PAD + i * (H + GY) };
+        });
+    });
+  return next;
+}
+
+/**
+ * Readable default layout.
+ * Partial stored positions caused left/right clusters with a huge empty middle — only honour
+ * stored coords when EVERY node has one (after a full drag-save); otherwise dense auto.
+ * Always collapse gaps so Fit doesn't shrink nodes to unreadability.
+ */
+function layoutGraph(g: FlowGraph, edges: FlowEdge[]): PosMap {
+  const allStored = g.nodes.length > 0 && g.nodes.every((n) => n.position != null);
+  if (g.layout === "stored" && allStored) {
+    const raw: PosMap = Object.fromEntries(g.nodes.map((n) => [n.id, { x: n.position!.x, y: n.position!.y }]));
+    return collapseGaps(raw);
+  }
+  return denseAutoLayout(g.nodes, edges);
 }
 
 function contentBounds(pos: PosMap) {
   const vals = Object.values(pos);
-  if (!vals.length) return { minX: 0, minY: 0, maxX: 400, maxY: 200, w: 400, h: 200 };
-  const minX = Math.min(...vals.map((p) => p.x)) - PAD;
-  const minY = Math.min(...vals.map((p) => p.y)) - PAD;
-  const maxX = Math.max(...vals.map((p) => p.x + W)) + PAD;
-  const maxY = Math.max(...vals.map((p) => p.y + H)) + PAD;
+  if (!vals.length) return { minX: 0, minY: 0, maxX: 320, maxY: 180, w: 320, h: 180 };
+  const minX = Math.min(...vals.map((p) => p.x));
+  const minY = Math.min(...vals.map((p) => p.y));
+  const maxX = Math.max(...vals.map((p) => p.x + W));
+  const maxY = Math.max(...vals.map((p) => p.y + H));
   return { minX, minY, maxX, maxY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
 }
 
@@ -62,15 +111,15 @@ export default function FlowTab() {
 
   const fitView = useCallback((p: PosMap) => {
     const b = contentBounds(p);
-    // Slight padding inside viewBox so stroke/labels aren't clipped
-    const pad = 8;
+    // Modest padding only — viewBox tracks the packed content box, not empty SVG space
+    const pad = 12;
     setViewBox(`${b.minX - pad} ${b.minY - pad} ${b.w + pad * 2} ${b.h + pad * 2}`);
   }, []);
 
-  // Rebuild positions when graph reloads (stored positions come on nodes).
+  // Rebuild positions when graph reloads; always fit so first paint is readable.
   useEffect(() => {
     if (!data) return;
-    const next = autoLayout(data, visibleEdges);
+    const next = layoutGraph(data, visibleEdges);
     setPos(next);
     fitView(next);
   }, [data, visibleEdges, fitView]);

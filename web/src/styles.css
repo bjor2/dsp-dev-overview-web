@@ -34,10 +34,10 @@ button.danger{background:#d64545;color:#fff;border-color:#d64545}button.ghost{ba
 
 
 /* Flow canvas: fill pane; viewBox handles zoom-to-fit */
-.flow-wrap { display: grid; grid-template-columns: 1fr 260px; gap: 8px; align-items: stretch; min-height: 420px; }
+.flow-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 8px; align-items: stretch; min-height: 420px; }
 svg.flow, .flow {
   width: 100%;
-  height: min(70vh, 640px);
+  height: min(62vh, 520px);
   background: #0d0f12;
   border: 1px solid #30363d;
   border-radius: 6px;
