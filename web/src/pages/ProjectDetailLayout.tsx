@@ -18,6 +18,11 @@ export default function ProjectDetailLayout() {
       <div className="page-head">
         <h2>{p ? <><HealthDot health={p.health} /> {p.project}</> : projectId}</h2>
         {p && <span className="muted">registration {fmtOslo(p.registrationGeneratedAt)}</span>}
+        {p?.traceItUrl && (
+          <a className="ext-link" href={p.traceItUrl} target="_blank" rel="noopener noreferrer" title={p.traceItUrl}>
+            TraceIt ↗
+          </a>
+        )}
         <button onClick={refresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh registration"}</button>
       </div>
       {error && <ErrorBanner error={error} onRetry={reload} />}

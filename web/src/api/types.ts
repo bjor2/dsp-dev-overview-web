@@ -4,6 +4,8 @@ export interface ProjectSummary {
   id: string; project: string; env: "dev"; health: Health;
   healthDetail: { appsUp: number; appsTotal: number; sbReachable: boolean; aiQueryOk: boolean };
   appCount: number; queueCount: number; dlqTotal: number; registrationGeneratedAt: string;
+  /** Slice 7 — open TraceIt externally when present. */
+  traceItUrl?: string;
 }
 export type Scope = "local" | "cloud" | "both";
 export type NodeKind = "app" | "queue" | "topic" | "subscription" | "external";

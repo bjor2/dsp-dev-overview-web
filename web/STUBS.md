@@ -10,7 +10,7 @@
 - **Flow layout** is a naive longest-path layering in SVG. It should be replaced with dagre/ELK (HANDOFF Q4). Drag, `PUT /flow/positions` and "Reset layout" are not implemented yet (the button is disabled).
 - **Error detection when the API is down**: Vite proxy 5xx/network failures map to `ApiError{code:"API_UNREACHABLE", retryable:true}`.
 - **Console SSE**: this assumes each SSE `message` event's `data` is one JSON `ConsoleChunk` (no named event types). There is no Last-Event-ID resume yet.
-- **Logs `since`**: the UI sends ISO-8601 durations (`PT15M`/`PT1H`/`PT24H`) and roles comma-joined. The backend needs to confirm the format.
+- **Logs `since`** (Slice 5 locked): `30m` / `2h` / `1d` or ISO datetime — **not** `PT15M`. Roles stay comma-joined.
 - **samples/send** for `mode:"one"` sends `event`, `projectIndex` and `dataVersion`. `ingress` sends `dataVersion`. `bodyOverride` is sent only if the JSON was edited.
 - **Demo data** (`src/mocks/demo.ts`) follows ADR-003/ADDENDA-001: snapshot→Ingress trigger, no Ingress→ingress-queue edge, seed inject → ingress + commands queues, local-inspect forwards to topic-inspect, counts 21/2/23. It only shows when the user opts in.
 

@@ -10,7 +10,7 @@ import { Empty, ErrorBanner, fmtOslo } from "../components/common";
 export default function LogsTab() {
   const { projectId = "" } = useParams();
   const [roles, setRoles] = useState<string[]>(APPS.map((a) => a.cloudRoleName));
-  const [since, setSince] = useState("PT1H");
+  const [since, setSince] = useState("2h");
   const [kql, setKql] = useState("");
   const [applied, setApplied] = useState({ roles, since, kql });
   const { data, error, loading, reload } = useApi(() => api.logs(projectId, applied), demoLogs, [projectId, JSON.stringify(applied)]);
@@ -20,7 +20,7 @@ export default function LogsTab() {
       <div className="banner info">Local runs don’t send to App Insights by default → see the Console tab.</div>
       <div className="toolbar">
         {APPS.map((a) => <label key={a.appId} className={`chip ${roles.includes(a.cloudRoleName) ? "on" : ""}`} title={a.cloudRoleName}><input type="checkbox" checked={roles.includes(a.cloudRoleName)} onChange={() => toggle(a.cloudRoleName)} />{a.label}</label>)}
-        <select value={since} onChange={(e) => setSince(e.target.value)}><option value="PT15M">15 min</option><option value="PT1H">1 h</option><option value="PT24H">24 h</option></select>
+        <select value={since} onChange={(e) => setSince(e.target.value)} title="Slice 5: 30m | 2h | 1d or ISO datetime"><option value="30m">30 min</option><option value="2h">2 h</option><option value="1d">1 day</option></select>
         <input placeholder="KQL filter (optional)" value={kql} onChange={(e) => setKql(e.target.value)} style={{ flex: 1 }} />
         <button onClick={() => setApplied({ roles, since, kql })}>Run</button>
       </div>

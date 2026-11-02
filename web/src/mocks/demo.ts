@@ -7,6 +7,7 @@ export const demoProjects: ProjectSummary[] = [{
   id: "customerproject.dev", project: "customerproject", env: "dev", health: "amber",
   healthDetail: { appsUp: 2, appsTotal: 3, sbReachable: true, aiQueryOk: true },
   appCount: 3, queueCount: 6, dlqTotal: 2, registrationGeneratedAt: "2026-11-02T12:45:00+01:00",
+  traceItUrl: "https://traceit-dev.sgdn.no",
 }];
 
 const sb = (a: number, d: number, owner: "project" | "shared" = "project", maxDeliveryCount: number | null = 10) => ({ activeCount: a, deadLetterCount: d, dlqHot: d > 0, owner, maxDeliveryCount });

@@ -15,7 +15,7 @@ export default function ProjectListPage() {
       {data && data.length === 0 && <Empty>No registrations. Add one under architecture/registrations/.</Empty>}
       {data && data.length > 0 && (
         <table className="grid">
-          <thead><tr><th>Health</th><th>Project</th><th>Env</th><th>Apps up</th><th>SB</th><th>AI</th><th>Queues</th><th>DLQ</th><th>Registration</th></tr></thead>
+          <thead><tr><th>Health</th><th>Project</th><th>Env</th><th>Apps up</th><th>SB</th><th>AI</th><th>Queues</th><th>DLQ</th><th>TraceIt</th><th>Registration</th></tr></thead>
           <tbody>
             {data.map((p) => (
               <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${encodeURIComponent(p.id)}/flow`)}>
@@ -27,6 +27,13 @@ export default function ProjectListPage() {
                 <td>{p.healthDetail.aiQueryOk ? "✓" : "✗"}</td>
                 <td>{p.queueCount}</td>
                 <td><Count v={p.dlqTotal} hot={p.dlqTotal > 0} /></td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  {p.traceItUrl ? (
+                    <a className="ext-link" href={p.traceItUrl} target="_blank" rel="noopener noreferrer" title={p.traceItUrl}>TraceIt ↗</a>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
                 <td className="muted">{fmtOslo(p.registrationGeneratedAt)}</td>
               </tr>
             ))}
