@@ -25,7 +25,7 @@ export default function SampleMessagePicker({ open, projectId, onClose }: { open
 
   const send = async () => {
     if (!preset) return;
-    if (preset.destructive && !confirm(`${preset.label}? Local emulator only.`)) return;
+    if (preset.destructive && !confirm(`${preset.label}? Sandbox Service Bus only (emulator / developer-local namespace).`)) return;
     setStatus(null); setSendErr(null);
     try {
       if (preset.mode === "purge") { const r = await api.purge(projectId); setStatus(`Purged ${r.purged}`); return; }
