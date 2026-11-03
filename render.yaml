@@ -26,3 +26,5 @@ services:
         sync: false # https://<service>.onrender.com
       - key: API_UPSTREAM
         sync: false # blank -> /api returns 503
+      - key: FRONTDOOR_SHARED_SECRET
+        sync: false # ADDENDA-007; same value as the API

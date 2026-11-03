@@ -2,7 +2,7 @@
 
 Render **Web Service** front door for DSP Dev Overview (ADR-006): Entra ID OIDC login (confidential client, auth code + PKCE, Osilion tenant only), server-side session, `/api/*` proxy to the overview API, and the overview SPA from `web/dist`.
 
-Routes: `/healthz` (public) → `/auth/login|callback|logout` (public) → `requireAuth` (HTML → 302 `/auth/login`, `/api` → 401) → `/api/*` proxy (strips Authorization/Cookie, adds `X-Overview-User`; 503 if `API_UPSTREAM` blank) → static `web/dist` → SPA fallback.
+Routes: `/healthz` (public) → `/auth/login|callback|logout` (public) → `requireAuth` (HTML → 302 `/auth/login`, `/api` → 401) → `/api/*` proxy (strips Authorization/Cookie/inbound X-Frontdoor-Secret, adds `X-Overview-User` and `X-Frontdoor-Secret` (ADDENDA-007); 503 if `API_UPSTREAM` blank) → static `web/dist` → SPA fallback.
 
 Callback enforces state, nonce, PKCE, `tid === AZURE_AD_TENANT_ID`, `ALLOWED_EMAILS`, and `session.regenerate()`.
 
@@ -15,6 +15,7 @@ Callback enforces state, nonce, PKCE, `tid === AZURE_AD_TENANT_ID`, `ALLOWED_EMA
 | `SESSION_SECRET` | 32+ random bytes (required when `NODE_ENV=production`) |
 | `ALLOWED_EMAILS` | `bjor.byrkjedal@osilion.no` |
 | `API_UPSTREAM` | overview API base, e.g. `http://127.0.0.1:5090`; blank → `/api` 503 |
+| `FRONTDOOR_SHARED_SECRET` | same value as the API's; sent upstream only by the session-gated `/api` proxy, never to the browser. Local: `~/.dsp-overview-frontdoor-secret` |
 | `PUBLIC_BASE_URL` | `https://<service>.onrender.com` / `http://localhost:3000` |
 | `NODE_ENV` | `production` on Render (enables Secure cookie) |
 

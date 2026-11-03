@@ -15,6 +15,9 @@ const TENANT = env.AZURE_AD_TENANT_ID || "";
 const PUBLIC_BASE_URL = (env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const ALLOWED = (env.ALLOWED_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const API_UPSTREAM = (env.API_UPSTREAM || "").trim();
+// ADDENDA-007: sent to the API only from the session-gated /api proxy; never to the browser, never logged.
+const FRONTDOOR_SECRET = (env.FRONTDOOR_SHARED_SECRET || "").trim();
+if (API_UPSTREAM && !FRONTDOOR_SECRET) console.warn("[proxy] FRONTDOOR_SHARED_SECRET not set: the API will reject proxied calls.");
 const authConfigured = Boolean(TENANT && env.AZURE_AD_CLIENT_ID && env.AZURE_AD_CLIENT_SECRET);
 
 if (PROD && !env.SESSION_SECRET) { console.error("SESSION_SECRET required in production"); process.exit(1); }
@@ -124,12 +127,13 @@ if (API_UPSTREAM) {
   const UP = API_UPSTREAM.replace(/\/$/, "");
   const RETRIES = 2, TIMEOUT_MS = 120000;
   const COLD = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "TimeoutError", "AbortError"];
-  const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host", "cookie", "authorization"]);
+  const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host", "cookie", "authorization", "x-frontdoor-secret"]);
   app.use("/api", express.raw({ type: () => true, limit: "5mb" }), async (req, res) => {
     const url = UP + "/api" + req.url;
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k) && typeof v === "string") headers[k] = v;
     headers["x-overview-user"] = req.session.user.email;
+    if (FRONTDOOR_SECRET) headers["x-frontdoor-secret"] = FRONTDOOR_SECRET; // after the session gate above; inbound copies dropped via HOP
     const hasBody = !["GET", "HEAD"].includes(req.method) && Buffer.isBuffer(req.body) && req.body.length;
     let lastErr;
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
