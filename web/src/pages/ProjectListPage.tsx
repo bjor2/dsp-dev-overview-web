@@ -6,7 +6,7 @@ import { Count, Empty, ErrorBanner, HealthDot, fmtOslo } from "../components/com
 
 export default function ProjectListPage() {
   const nav = useNavigate();
-  const { data, error, loading, reload } = useApi(api.projects, demoProjects, []);
+  const { data, error, loading, reload } = useApi(api.projects, demoProjects, [], 15_000); // DLQ/health refresh every 15 s
   return (
     <section>
       <div className="page-head"><h2>Projects</h2><button onClick={reload}>Refresh</button></div>
@@ -26,7 +26,7 @@ export default function ProjectListPage() {
                 <td>{p.healthDetail.sbReachable ? "✓" : "✗"}</td>
                 <td>{p.healthDetail.aiQueryOk ? "✓" : "✗"}</td>
                 <td>{p.queueCount}</td>
-                <td><Count v={p.dlqTotal} hot={p.dlqTotal > 0} /></td>
+                <td><span title={p.dlqTotal === null ? "Unknown: Service Bus did not answer" : undefined}><Count v={p.dlqTotal} hot={(p.dlqTotal ?? 0) > 0} /></span></td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {p.traceItUrl ? (
                     <a className="ext-link" href={p.traceItUrl} target="_blank" rel="noopener noreferrer" title={p.traceItUrl}>TraceIt ↗</a>

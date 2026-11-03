@@ -3,7 +3,7 @@ export type Health = "green" | "amber" | "red" | "unknown";
 export interface ProjectSummary {
   id: string; project: string; env: "dev"; health: Health;
   healthDetail: { appsUp: number; appsTotal: number; sbReachable: boolean; aiQueryOk: boolean };
-  appCount: number; queueCount: number; dlqTotal: number; registrationGeneratedAt: string;
+  appCount: number; queueCount: number; dlqTotal: number | null; registrationGeneratedAt: string;
   /** Slice 7 — open TraceIt externally when present. */
   traceItUrl?: string;
 }
