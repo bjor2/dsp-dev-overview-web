@@ -142,6 +142,27 @@ function edgePath(a: { x: number; y: number }, b: { x: number; y: number }): str
   return `M${s.x},${s.y} C${s.x + s.nx * c},${s.y + s.ny * c} ${t.x + t.nx * c},${t.y + t.ny * c} ${t.x},${t.y}`;
 }
 
+/** Nearest non-overlapping spot for `id` (12px gap), moving only that node. */
+function nudgeOffOverlaps(pos: PosMap, id: string, gap = 12): { x: number; y: number } {
+  const p = pos[id];
+  const others = Object.entries(pos).filter(([k]) => k !== id).map(([, v]) => v);
+  const hits = (x: number, y: number) =>
+    others.some((o) => x < o.x + W + gap && x + W + gap > o.x && y < o.y + H + gap && y + H + gap > o.y);
+  if (!hits(p.x, p.y)) return p;
+  // Candidates: snap to each side of every blocker; pick the closest free one.
+  const cands: { x: number; y: number }[] = [];
+  for (const o of others) {
+    cands.push({ x: o.x - W - gap, y: p.y }, { x: o.x + W + gap, y: p.y }, { x: p.x, y: o.y - H - gap }, { x: p.x, y: o.y + H + gap });
+  }
+  const free = cands.filter((c) => !hits(c.x, c.y)).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y));
+  if (free[0]) return free[0];
+  for (let r = 1; r < 60; r++) for (let a = 0; a < 16; a++) {
+    const x = p.x + Math.cos((a / 16) * Math.PI * 2) * r * 10, y = p.y + Math.sin((a / 16) * Math.PI * 2) * r * 10;
+    if (!hits(x, y)) return { x, y };
+  }
+  return p;
+}
+
 function contentBounds(pos: PosMap) {
   const vals = Object.values(pos);
   if (!vals.length) return { minX: 0, minY: 0, maxX: 320, maxY: 180, w: 320, h: 180 };
@@ -293,7 +314,14 @@ export default function FlowTab() {
     const d = drag.current;
     drag.current = null;
     if (!d?.moved) return;
-    persist(posRef.current);
+    const cur = posRef.current;
+    const n = nudgeOffOverlaps(cur, d.id);
+    const next = n === cur[d.id] ? cur : { ...cur, [d.id]: n };
+    if (next !== cur) {
+      posRef.current = next;
+      setPos(next);
+    }
+    persist(next);
   };
 
   const resetLayout = async () => {

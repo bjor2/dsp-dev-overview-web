@@ -14,6 +14,16 @@ export class ApiError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Free-tier Render API sleeps; front door returns 502/503 (API_UPSTREAM_COLD) while it wakes.
+/** Last `X-Dsp-Upstream` seen from the front door (null in dev / when absent). */
+export let lastUpstream: { target: string; fallback: boolean } | null = null;
+function noteUpstream(res: Response) {
+  const t = res.headers.get("X-Dsp-Upstream");
+  if (!t) return;
+  const fb = res.headers.get("X-Dsp-Upstream-Fallback") === "1";
+  if (lastUpstream?.target === t && lastUpstream.fallback === fb) return;
+  lastUpstream = { target: t, fallback: fb };
+  window.dispatchEvent(new Event("dsp:upstream"));
+}
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   try {
     return await reqOnce<T>(method, path, body);
@@ -39,6 +49,7 @@ async function reqOnce<T>(method: string, path: string, body?: unknown): Promise
   } catch (e) {
     throw new ApiError(0, "API_UNREACHABLE", `Overview API unreachable (${(e as Error).message})`, true);
   }
+  noteUpstream(res);
   if (!res.ok) {
     let parsed: ApiErrorBody | null = null;
     try { parsed = await res.json(); } catch { /* not json */ }
