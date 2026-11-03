@@ -25,4 +25,12 @@ services:
       - key: PUBLIC_BASE_URL
         sync: false # https://<service>.onrender.com
       - key: API_UPSTREAM
-        sync: false # blank -> /api returns 503
+        sync: false # legacy name for RENDER_API_UPSTREAM
+      - key: API_UPSTREAM_MODE
+        sync: false # box | render (code default box)
+      - key: BOX_API_UPSTREAM
+        sync: false # https://<MACHINE_HOST>
+      - key: BOX_UPSTREAM_SECRET
+        sync: false # ngrok vault dsp-overview/frontdoor-key; set only once the tunnel is up
+      - key: API_UPSTREAM_FALLBACK
+        sync: false # off | read-only

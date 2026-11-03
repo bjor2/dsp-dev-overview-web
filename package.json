@@ -3,11 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "cd web && npm ci --include=dev && VITE_API_BASE=/api npm run build",
     "start": "node server/index.js",
-    "sync-ui": "rm -rf web/src && cp -r ../dev-overview/ui/app/src web/src"
+    "sync-ui": "rm -rf web/src && cp -r ../dev-overview/ui/app/src web/src",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "express": "^4.21.2",

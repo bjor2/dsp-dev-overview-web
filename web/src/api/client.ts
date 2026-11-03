@@ -28,7 +28,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     throw e;
   }
 }
-const isCold = (e: ApiError) => e.code === "API_UPSTREAM_COLD" || e.status === 502 || e.status === 503 || e.status === 504;
+const isCold = (e: ApiError) => e.code !== "BOX_OFFLINE" && (e.code === "API_UPSTREAM_COLD" || e.status === 502 || e.status === 503 || e.status === 504);
 async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -42,6 +42,7 @@ async function reqOnce<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     let parsed: ApiErrorBody | null = null;
     try { parsed = await res.json(); } catch { /* not json */ }
+    if (parsed?.error?.code === "BOX_OFFLINE") window.dispatchEvent(new Event("dsp:box-offline")); // UpstreamBanner refresh
     if (parsed?.error) throw new ApiError(res.status, parsed.error.code, parsed.error.message, parsed.error.retryable);
     // Vite proxy returns 500/502/504 when :5090 is down
     throw new ApiError(res.status, res.status >= 500 ? "API_UNREACHABLE" : "HTTP_" + res.status, `HTTP ${res.status} ${res.statusText}`, res.status >= 500);

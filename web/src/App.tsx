@@ -1,6 +1,7 @@
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { API_BASE } from "./api/client";
 import { DemoBanner } from "./components/common";
+import { UpstreamBanner } from "./components/UpstreamBanner";
 import ProjectListPage from "./pages/ProjectListPage";
 import ProjectDetailLayout from "./pages/ProjectDetailLayout";
 import FlowTab from "./pages/FlowTab";
@@ -22,6 +23,7 @@ export default function App() {
         <UserChipSlot />
       </header>
       <DemoBanner />
+      <UpstreamBanner />
       <main>
         <Routes>
           <Route path="/" element={<ProjectListPage />} />
