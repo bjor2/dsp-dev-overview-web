@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useApi } from "../api/useApi";
@@ -7,9 +8,12 @@ import { Count, Empty, ErrorBanner, HealthDot, fmtOslo } from "../components/com
 export default function ProjectListPage() {
   const nav = useNavigate();
   const { data, error, loading, reload } = useApi(api.projects, demoProjects, [], 15_000); // DLQ/health refresh every 15 s
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  useEffect(() => { if (data && !error) setUpdatedAt(new Date()); }, [data, error]);
   return (
     <section>
-      <div className="page-head"><h2>Projects</h2><button onClick={reload}>Refresh</button></div>
+      <div className="page-head"><h2>Projects</h2><button onClick={reload}>Refresh</button>
+        {updatedAt && <span className="muted">updated {updatedAt.toLocaleTimeString()}</span>}</div>
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {loading && <Empty>Loading…</Empty>}
       {data && data.length === 0 && <Empty>No registrations. Add one under architecture/registrations/.</Empty>}

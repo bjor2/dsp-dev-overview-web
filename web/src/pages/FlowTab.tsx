@@ -248,6 +248,12 @@ export default function FlowTab() {
     moved.current.forEach((id) => {
       if (prev[id] && next[id]) next[id] = prev[id];
     });
+    // De-overlap nodes without a saved/moved position (no auto-save on load).
+    const allStored = data.layout === "stored" && data.nodes.every((n) => n.position != null);
+    for (const n of data.nodes) {
+      if (!next[n.id] || moved.current.has(n.id) || (allStored && n.position != null)) continue;
+      next[n.id] = nudgeOffOverlaps(next, n.id);
+    }
     setPos(next);
     if (needFit.current) {
       needFit.current = false;

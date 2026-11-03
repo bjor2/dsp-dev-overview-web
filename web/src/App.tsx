@@ -38,6 +38,7 @@ export default function App() {
         <span className="badge env">dev</span>
         <ApiHint />
         <span className="spacer" />
+        <span className="api-hint build-sha" title="Build commit">build {__BUILD_SHA__}</span>
         <UserChipSlot />
       </header>
       <DemoBanner />
