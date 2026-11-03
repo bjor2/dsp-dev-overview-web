@@ -6,6 +6,7 @@ import type { FlowEdge, FlowGraph, FlowNode } from "../api/types";
 import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner } from "../components/common";
 import SampleMessagePicker from "../components/SampleMessagePicker";
+import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
 
 /** Node size + tight gutters (top→bottom layers). */
 const W = 176, H = 40, GX = 24, GY = 56, PAD = 10, MAX_ROW = 7;
@@ -59,6 +60,26 @@ function layoutGraph(g: FlowGraph, edges: FlowEdge[]): PosMap {
   return denseAutoLayout(g.nodes, edges);
 }
 
+type Side = "top" | "bottom" | "left" | "right";
+/** Anchor on the side of `a` facing `b` (centre-to-centre direction). */
+function anchor(a: { x: number; y: number }, b: { x: number; y: number }): { x: number; y: number; nx: number; ny: number } {
+  const dx = b.x + W / 2 - (a.x + W / 2), dy = b.y + H / 2 - (a.y + H / 2);
+  const side: Side = Math.abs(dx) / W > Math.abs(dy) / H ? (dx > 0 ? "right" : "left") : dy > 0 ? "bottom" : "top";
+  switch (side) {
+    case "right": return { x: a.x + W, y: a.y + H / 2, nx: 1, ny: 0 };
+    case "left": return { x: a.x, y: a.y + H / 2, nx: -1, ny: 0 };
+    case "bottom": return { x: a.x + W / 2, y: a.y + H, nx: 0, ny: 1 };
+    default: return { x: a.x + W / 2, y: a.y, nx: 0, ny: -1 };
+  }
+}
+
+function edgePath(a: { x: number; y: number }, b: { x: number; y: number }): string {
+  const s = anchor(a, b), t = anchor(b, a);
+  const dist = Math.hypot(t.x - s.x, t.y - s.y);
+  const c = Math.max(24, Math.min(90, dist * 0.4));
+  return `M${s.x},${s.y} C${s.x + s.nx * c},${s.y + s.ny * c} ${t.x + t.nx * c},${t.y + t.ny * c} ${t.x},${t.y}`;
+}
+
 function contentBounds(pos: PosMap) {
   const vals = Object.values(pos);
   if (!vals.length) return { minX: 0, minY: 0, maxX: 320, maxY: 180, w: 320, h: 180 };
@@ -77,13 +98,22 @@ export default function FlowTab() {
   const [pos, setPos] = useState<PosMap>({});
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const pan = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null);
-  const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const drag = useRef<{ id: string; ox: number; oy: number; moved: boolean } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const saveTimer = useRef<number | null>(null);
   const scope = showCloud ? "all" : "local";
   const { data, error, loading, reload } = useApi(() => api.flow(projectId, scope), demoFlow, [projectId, scope]);
+  const { counts, updatedAt, refresh } = useFlowCounts(projectId);
+  /** Local positions are the source of truth; nodes the user moved are never overwritten by server data. */
+  const moved = useRef<Set<string>>(new Set());
+  const needFit = useRef(true); // first load, Reset, project change only
+  const posRef = useRef<PosMap>({});
+  posRef.current = pos;
+  useEffect(() => {
+    moved.current = new Set();
+    needFit.current = true;
+  }, [projectId]);
 
   const visibleEdges = useMemo(
     () => (data?.edges ?? []).filter((e) => showCloud || e.scope !== "cloud"),
@@ -126,26 +156,31 @@ export default function FlowTab() {
     return () => svg.removeEventListener("wheel", onWheel);
   }, [zoomAt, data]);
 
-  // Rebuild positions when graph reloads; always fit so first paint is readable.
+  // Rebuild positions only when the graph is (re)fetched; keep moved nodes; fit only when requested.
   useEffect(() => {
     if (!data) return;
-    const next = layoutGraph(data, visibleEdges);
+    const auto = layoutGraph(data, visibleEdges);
+    const prev = posRef.current;
+    const next: PosMap = { ...auto };
+    moved.current.forEach((id) => {
+      if (prev[id] && next[id]) next[id] = prev[id];
+    });
     setPos(next);
-    requestAnimationFrame(() => fitView(next));
-  }, [data, visibleEdges, fitView]);
+    if (needFit.current) {
+      needFit.current = false;
+      requestAnimationFrame(() => fitView(next));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, visibleEdges]);
 
+  // Fire-and-forget: no state change, no reload, no fit.
   const persist = useCallback(
     (next: PosMap) => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(async () => {
-        setSaving(true);
-        try {
-          await api.saveFlowPositions(projectId, next);
-        } catch {
-          /* keep local; user can retry via drag or Reset */
-        } finally {
-          setSaving(false);
-        }
+      saveTimer.current = window.setTimeout(() => {
+        api.saveFlowPositions(projectId, next).catch(() => {
+          /* keep local; next drag re-sends the full map */
+        });
       }, 350);
     },
     [projectId],
@@ -187,6 +222,7 @@ export default function FlowTab() {
     const nx = cur.x - d.ox;
     const ny = cur.y - d.oy;
     d.moved = true;
+    moved.current.add(d.id);
     setPos((prev) => ({ ...prev, [d.id]: { x: nx, y: ny } }));
   };
 
@@ -195,16 +231,15 @@ export default function FlowTab() {
     const d = drag.current;
     drag.current = null;
     if (!d?.moved) return;
-    setPos((prev) => {
-      persist(prev);
-      return prev;
-    });
+    persist(posRef.current);
   };
 
   const resetLayout = async () => {
     setResetting(true);
     try {
       await api.saveFlowPositions(projectId, {}); // {} = clear → auto (FlowPositionStore)
+      moved.current = new Set();
+      needFit.current = true;
       reload(); // reload → auto layout → fit
     } finally {
       setResetting(false);
@@ -219,17 +254,17 @@ export default function FlowTab() {
         <label>
           <input type="checkbox" checked={showCloud} onChange={(e) => setShowCloud(e.target.checked)} /> Show cloud edges
         </label>
-        <button onClick={reload}>Refresh</button>
+        <button onClick={() => { reload(); refresh(); }}>Refresh</button>
         <button type="button" onClick={() => fitView(pos)} title="Fit entire graph in view">
           Fit
         </button>
         <button type="button" onClick={() => zoomAt(1 / 1.2)} title="Zoom out">−</button>
         <button type="button" onClick={() => zoomAt(1.2)} title="Zoom in">+</button>
         <span className="muted zoom-pct">{Math.round(view.k * 100)}%</span>
+        {updatedAt && <span className="muted">counts {updatedAt.toLocaleTimeString()}</span>}
         <button type="button" onClick={resetLayout} disabled={resetting} title="PUT {} clears stored positions → auto layout">
           {resetting ? "Resetting…" : "Reset layout"}
         </button>
-        {saving && <span className="muted">Saving positions…</span>}
         <span className="spacer" />
         <span className="legend">
           <i className="l-solid" />
@@ -279,15 +314,7 @@ export default function FlowTab() {
               const a = pos[e.from],
                 b = pos[e.to];
               if (!a || !b) return null;
-              const x1 = a.x + W / 2,
-                y1 = a.y + H,
-                x2 = b.x + W / 2,
-                y2 = b.y;
-              const back = y2 <= y1;
-              const side = Math.max(a.x, b.x) + W;
-              const d = back
-                ? `M${a.x + W},${a.y + H / 2} C${side + 40},${a.y + H / 2} ${side + 40},${b.y + H / 2} ${b.x + W},${b.y + H / 2}`
-                : `M${x1},${y1} C${x1},${y1 + GY / 2} ${x2},${y2 - GY / 2} ${x2},${y2}`;
+              const d = edgePath(a, b);
               const cls = `edge ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
               return (
                 <g key={e.id}>
@@ -300,17 +327,19 @@ export default function FlowTab() {
             {data.nodes.map((n) => {
               const p = pos[n.id];
               if (!p) return null;
+              const c = n.kind === "queue" || n.kind === "subscription" ? nodeCounts(n, counts) : null;
+              const hot = c ? c.dlqHot : !!n.sb?.dlqHot;
               return (
                 <g
                   key={n.id}
                   transform={`translate(${p.x},${p.y})`}
-                  className={`node ${n.kind} ${n.sb?.dlqHot ? "hot" : ""} ${selected === n.id ? "sel" : ""}`}
+                  className={`node ${n.kind} ${hot ? "hot" : ""} ${selected === n.id ? "sel" : ""}`}
                   onPointerDown={(e) => onPointerDown(e, n.id)}
                   style={{ cursor: "grab" }}
                 >
                   <title>
                     {n.sb?.maxDeliveryCount != null
-                      ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${n.sb.dlqHot ? " · DLQ hot" : ""} · drag to move`
+                      ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
                       : `${n.label} · drag to move`}
                   </title>
                   <rect width={W} height={H} rx={n.kind === "app" ? 8 : 3} />
@@ -322,8 +351,8 @@ export default function FlowTab() {
                       ? n.app.attached
                         ? "● attached"
                         : "○ not attached"
-                      : n.sb
-                        ? `a ${n.sb.activeCount ?? "—"} · DLQ ${n.sb.deadLetterCount ?? "—"}`
+                      : c
+                        ? countsLabel(c)
                         : n.kind}
                   </text>
                 </g>
@@ -350,7 +379,8 @@ export default function FlowTab() {
                 )}
                 {sel.sb && (
                   <p>
-                    Active <Count v={sel.sb.activeCount} /> · DLQ <Count v={sel.sb.deadLetterCount} hot={sel.sb.dlqHot} /> ·{" "}
+                    Active <Count v={nodeCounts(sel, counts)?.active ?? sel.sb.activeCount} /> · DLQ{" "}
+                    <Count v={nodeCounts(sel, counts)?.dlq ?? sel.sb.deadLetterCount} hot={nodeCounts(sel, counts)?.dlqHot ?? sel.sb.dlqHot} /> ·{" "}
                     {sel.sb.owner}
                     {sel.sb.maxDeliveryCount != null && (
                       <>
