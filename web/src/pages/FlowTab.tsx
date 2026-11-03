@@ -7,75 +7,55 @@ import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner } from "../components/common";
 import SampleMessagePicker from "../components/SampleMessagePicker";
 
-/** Dense node size + tight gutters so Fit keeps labels readable. */
-const W = 136, H = 38, GX = 18, GY = 10, PAD = 10;
+/** Node size + tight gutters (top→bottom layers). */
+const W = 176, H = 40, GX = 24, GY = 56, PAD = 10, MAX_ROW = 7;
+const SEED = "ext:seed-messages";
+const ZMIN = 0.2, ZMAX = 3;
 
 type PosMap = Record<string, { x: number; y: number }>;
+type View = { x: number; y: number; k: number };
 
 function computeLayers(nodes: FlowNode[], edges: FlowEdge[]): Record<string, number> {
   const layer: Record<string, number> = Object.fromEntries(nodes.map((n) => [n.id, 0]));
   for (let i = 0; i < nodes.length; i++)
     for (const e of edges)
-      if (layer[e.from] !== undefined && layer[e.to] !== undefined && layer[e.to] < layer[e.from] + 1)
+      if (layer[e.from] !== undefined && layer[e.to] !== undefined && layer[e.to] < layer[e.from] + 1 && e.to !== SEED)
         layer[e.to] = layer[e.from] + 1;
+  // Seed kit is the sole entry row; everything else starts below it.
+  if (layer[SEED] !== undefined) {
+    for (const id of Object.keys(layer)) if (id !== SEED) layer[id] = Math.max(1, layer[id] + (layer[id] === 0 ? 1 : 0));
+    layer[SEED] = 0;
+  }
   return layer;
 }
 
-/** Pack every node into consecutive columns/rows — never leave empty horizontal lanes. */
+/** Top→bottom layered layout; rows centred, long rows wrapped so the graph stays compact. */
 function denseAutoLayout(nodes: FlowNode[], edges: FlowEdge[]): PosMap {
   const layer = computeLayers(nodes, edges);
-  const cols: Record<number, FlowNode[]> = {};
-  nodes.forEach((n) => (cols[layer[n.id]] ??= []).push(n));
-  // Stable order within a column for less visual jump
-  Object.values(cols).forEach((ns) => ns.sort((a, b) => a.id.localeCompare(b.id)));
-  const colIdx = Object.keys(cols).map(Number).sort((a, b) => a - b);
+  const rows: Record<number, FlowNode[]> = {};
+  nodes.forEach((n) => (rows[layer[n.id]] ??= []).push(n));
+  Object.values(rows).forEach((ns) => ns.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)));
+  const lines: FlowNode[][] = [];
+  Object.keys(rows).map(Number).sort((a, b) => a - b).forEach((r) => {
+    const ns = rows[r];
+    for (let i = 0; i < ns.length; i += MAX_ROW) lines.push(ns.slice(i, i + MAX_ROW));
+  });
+  const widest = Math.max(1, ...lines.map((l) => l.length));
+  const fullW = widest * W + (widest - 1) * GX;
   const pos: PosMap = {};
-  colIdx.forEach((c, ci) => {
-    cols[c].forEach((n, i) => {
-      pos[n.id] = { x: PAD + ci * (W + GX), y: PAD + i * (H + GY) };
-    });
+  lines.forEach((line, li) => {
+    const lw = line.length * W + (line.length - 1) * GX;
+    const x0 = PAD + (fullW - lw) / 2;
+    line.forEach((n, i) => (pos[n.id] = { x: x0 + i * (W + GX), y: PAD + li * (H + GY) }));
   });
   return pos;
 }
 
-/** Collapse large X/Y gaps (e.g. partial stored positions left+right) into dense packing, preserving order. */
-function collapseGaps(pos: PosMap): PosMap {
-  const ids = Object.keys(pos);
-  if (ids.length === 0) return pos;
-  const xs = [...new Set(ids.map((id) => pos[id].x))].sort((a, b) => a - b);
-  const xMap = new Map(xs.map((x, i) => [x, PAD + i * (W + GX)]));
-  // Group by compacted column, then pack Y
-  const byCol: Record<number, string[]> = {};
-  ids.forEach((id) => {
-    const cx = xMap.get(pos[id].x)!;
-    (byCol[cx] ??= []).push(id);
-  });
-  const next: PosMap = {};
-  Object.keys(byCol)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .forEach((cx) => {
-      byCol[cx]
-        .sort((a, b) => pos[a].y - pos[b].y || a.localeCompare(b))
-        .forEach((id, i) => {
-          next[id] = { x: cx, y: PAD + i * (H + GY) };
-        });
-    });
-  return next;
-}
-
-/**
- * Readable default layout.
- * Partial stored positions caused left/right clusters with a huge empty middle — only honour
- * stored coords when EVERY node has one (after a full drag-save); otherwise dense auto.
- * Always collapse gaps so Fit doesn't shrink nodes to unreadability.
- */
+/** Honour stored coords only when EVERY node has one (avoids partial left/right clusters). */
 function layoutGraph(g: FlowGraph, edges: FlowEdge[]): PosMap {
   const allStored = g.nodes.length > 0 && g.nodes.every((n) => n.position != null);
-  if (g.layout === "stored" && allStored) {
-    const raw: PosMap = Object.fromEntries(g.nodes.map((n) => [n.id, { x: n.position!.x, y: n.position!.y }]));
-    return collapseGaps(raw);
-  }
+  if (g.layout === "stored" && allStored)
+    return Object.fromEntries(g.nodes.map((n) => [n.id, { x: n.position!.x, y: n.position!.y }]));
   return denseAutoLayout(g.nodes, edges);
 }
 
@@ -95,7 +75,8 @@ export default function FlowTab() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [pos, setPos] = useState<PosMap>({});
-  const [viewBox, setViewBox] = useState("0 0 400 240");
+  const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
+  const pan = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const drag = useRef<{ id: string; ox: number; oy: number; moved: boolean } | null>(null);
@@ -110,18 +91,47 @@ export default function FlowTab() {
   );
 
   const fitView = useCallback((p: PosMap) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const r = svg.getBoundingClientRect();
     const b = contentBounds(p);
-    // Modest padding only — viewBox tracks the packed content box, not empty SVG space
-    const pad = 12;
-    setViewBox(`${b.minX - pad} ${b.minY - pad} ${b.w + pad * 2} ${b.h + pad * 2}`);
+    const pad = 24;
+    const k = Math.min(ZMAX, Math.max(ZMIN, Math.min((r.width - pad * 2) / b.w, (r.height - pad * 2) / b.h, 1.6)));
+    setView({ k, x: (r.width - b.w * k) / 2 - b.minX * k, y: (r.height - b.h * k) / 2 - b.minY * k });
   }, []);
+
+  const zoomAt = useCallback((factor: number, cx?: number, cy?: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const r = svg.getBoundingClientRect();
+    const px = cx ?? r.width / 2, py = cy ?? r.height / 2;
+    setView((v) => {
+      const k = Math.min(ZMAX, Math.max(ZMIN, v.k * factor));
+      const f = k / v.k;
+      return { k, x: px - (px - v.x) * f, y: py - (py - v.y) * f };
+    });
+  }, []);
+
+  // Non-passive wheel listener so preventDefault works (wheel + pinch zoom toward cursor).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = svg.getBoundingClientRect();
+      const step = e.ctrlKey ? 0.01 : 0.0015;
+      zoomAt(Math.exp(-e.deltaY * step), e.clientX - r.left, e.clientY - r.top);
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, [zoomAt, data]);
 
   // Rebuild positions when graph reloads; always fit so first paint is readable.
   useEffect(() => {
     if (!data) return;
     const next = layoutGraph(data, visibleEdges);
     setPos(next);
-    fitView(next);
+    requestAnimationFrame(() => fitView(next));
   }, [data, visibleEdges, fitView]);
 
   const persist = useCallback(
@@ -141,16 +151,17 @@ export default function FlowTab() {
     [projectId],
   );
 
+  /** Screen → graph coords through the current pan/zoom. */
   const clientToSvg = (clientX: number, clientY: number) => {
-    const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r) return { x: 0, y: 0 };
+    return { x: (clientX - r.left - view.x) / view.k, y: (clientY - r.top - view.y) / view.k };
+  };
+
+  const onBgPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    pan.current = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
   };
 
   const onPointerDown = (e: React.PointerEvent, id: string) => {
@@ -165,6 +176,11 @@ export default function FlowTab() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    const pn = pan.current;
+    if (pn) {
+      setView((v) => ({ ...v, x: pn.vx + e.clientX - pn.sx, y: pn.vy + e.clientY - pn.sy }));
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const cur = clientToSvg(e.clientX, e.clientY);
@@ -175,6 +191,7 @@ export default function FlowTab() {
   };
 
   const onPointerUp = () => {
+    pan.current = null;
     const d = drag.current;
     drag.current = null;
     if (!d?.moved) return;
@@ -188,7 +205,7 @@ export default function FlowTab() {
     setResetting(true);
     try {
       await api.saveFlowPositions(projectId, {}); // {} = clear → auto (FlowPositionStore)
-      reload();
+      reload(); // reload → auto layout → fit
     } finally {
       setResetting(false);
     }
@@ -197,7 +214,7 @@ export default function FlowTab() {
   const sel = data?.nodes.find((n) => n.id === selected);
 
   return (
-    <div>
+    <div className="flow-page">
       <div className="toolbar">
         <label>
           <input type="checkbox" checked={showCloud} onChange={(e) => setShowCloud(e.target.checked)} /> Show cloud edges
@@ -206,6 +223,9 @@ export default function FlowTab() {
         <button type="button" onClick={() => fitView(pos)} title="Fit entire graph in view">
           Fit
         </button>
+        <button type="button" onClick={() => zoomAt(1 / 1.2)} title="Zoom out">−</button>
+        <button type="button" onClick={() => zoomAt(1.2)} title="Zoom in">+</button>
+        <span className="muted zoom-pct">{Math.round(view.k * 100)}%</span>
         <button type="button" onClick={resetLayout} disabled={resetting} title="PUT {} clears stored positions → auto layout">
           {resetting ? "Resetting…" : "Reset layout"}
         </button>
@@ -215,7 +235,7 @@ export default function FlowTab() {
           <i className="l-solid" />
           trigger/publish <i className="l-dot" />
           inferred <i className="l-dash" />
-          cloud · drag nodes to rearrange
+          cloud · drag nodes · drag canvas to pan · wheel to zoom
         </span>
         <button className="primary" onClick={() => setPickerOpen(true)}>
           Inject sample…
@@ -240,29 +260,34 @@ export default function FlowTab() {
           <svg
             ref={svgRef}
             className="flow"
-            viewBox={viewBox}
-            preserveAspectRatio="xMidYMid meet"
+            onPointerDown={onBgPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerLeave={onPointerUp}
           >
             <defs>
               <marker id="arr" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                <path d="M0,0L10,5L0,10z" fill="#667" />
+                <path d="M0,0L10,5L0,10z" fill="#94a3b8" />
               </marker>
+              <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+                <circle cx="1" cy="1" r="1" fill="#d7dde6" />
+              </pattern>
             </defs>
+            <rect className="flow-bg" width="100%" height="100%" fill="url(#dots)" />
+            <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
             {visibleEdges.map((e) => {
               const a = pos[e.from],
                 b = pos[e.to];
               if (!a || !b) return null;
-              const x1 = a.x + W,
-                y1 = a.y + H / 2,
-                x2 = b.x,
-                y2 = b.y + H / 2;
-              const back = x2 <= x1;
+              const x1 = a.x + W / 2,
+                y1 = a.y + H,
+                x2 = b.x + W / 2,
+                y2 = b.y;
+              const back = y2 <= y1;
+              const side = Math.max(a.x, b.x) + W;
               const d = back
-                ? `M${a.x + W / 2},${a.y + H} C${a.x + W / 2},${a.y + H + 40} ${b.x + W / 2},${b.y + H + 40} ${b.x + W / 2},${b.y + H}`
-                : `M${x1},${y1} C${x1 + 28},${y1} ${x2 - 28},${y2} ${x2},${y2}`;
+                ? `M${a.x + W},${a.y + H / 2} C${side + 40},${a.y + H / 2} ${side + 40},${b.y + H / 2} ${b.x + W},${b.y + H / 2}`
+                : `M${x1},${y1} C${x1},${y1 + GY / 2} ${x2},${y2 - GY / 2} ${x2},${y2}`;
               const cls = `edge ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
               return (
                 <g key={e.id}>
@@ -289,10 +314,10 @@ export default function FlowTab() {
                       : `${n.label} · drag to move`}
                   </title>
                   <rect width={W} height={H} rx={n.kind === "app" ? 8 : 3} />
-                  <text x={8} y={16} className="t1">
+                  <text x={8} y={17} className="t1">
                     {n.label}
                   </text>
-                  <text x={8} y={32} className="t2">
+                  <text x={8} y={33} className="t2">
                     {n.app
                       ? n.app.attached
                         ? "● attached"
@@ -304,6 +329,7 @@ export default function FlowTab() {
                 </g>
               );
             })}
+            </g>
           </svg>
           <aside className="side-panel">
             {!sel && <Empty>Select or drag a node.</Empty>}
