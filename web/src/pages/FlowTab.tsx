@@ -13,6 +13,68 @@ const W = 176, H = 40, GX = 24, GY = 56, PAD = 10, MAX_ROW = 7;
 const SEED = "ext:seed-messages";
 const ZMIN = 0.2, ZMAX = 3;
 
+/** Single palette for canvas + legend. */
+const PALETTE = {
+  kind: {
+    external: { fill: "#fff4e0", stroke: "#d39b3a", dash: "4 3", label: "Seed / external" },
+    app: { fill: "#e0edff", stroke: "#5b8def", dash: undefined, label: "App" },
+    queue: { fill: "#e6f6ea", stroke: "#5aa86c", dash: undefined, label: "Queue" },
+    topic: { fill: "#f1e9ff", stroke: "#9a7bd8", dash: undefined, label: "Topic" },
+    subscription: { fill: "#f7f2ff", stroke: "#b39ddb", dash: undefined, label: "Subscription" },
+  } as Record<string, { fill: string; stroke: string; dash?: string; label: string }>,
+  fallback: { fill: "#ffffff", stroke: "#94a3b8", dash: undefined, label: "Other" },
+  hot: "#dc2626",
+  sel: "#2563eb",
+  edge: "#94a3b8",
+  inject: "#2f80ed",
+  back: "#f59e0b",
+  attached: "#16a34a",
+  detached: "#94a3b8",
+  text: "#0f172a",
+  sub: "#475569",
+};
+const kindStyle = (k: string) => PALETTE.kind[k] ?? PALETTE.fallback;
+const LEGEND_KEY = "flow.legend.collapsed";
+
+function FlowLegend() {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(LEGEND_KEY) === "1");
+  const toggle = () => setCollapsed((c) => { localStorage.setItem(LEGEND_KEY, c ? "0" : "1"); return !c; });
+  const box = (fill: string, stroke: string, dash?: string, sw = 1.2) => (
+    <svg width="22" height="12"><rect x="1" y="1" width="20" height="10" rx="2" fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={dash} /></svg>
+  );
+  const line = (stroke: string, dash?: string) => (
+    <svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke={stroke} strokeWidth="1.8" strokeDasharray={dash} /></svg>
+  );
+  return (
+    <div className="flow-legend" onPointerDown={(e) => e.stopPropagation()}>
+      <button type="button" className="ghost legend-toggle" onClick={toggle} aria-expanded={!collapsed}>
+        {collapsed ? "▸ Legend" : "▾ Legend"}
+      </button>
+      {!collapsed && (
+        <div className="legend-body">
+          <div className="legend-col">
+            {Object.values(PALETTE.kind).map((k) => (
+              <div key={k.label}>{box(k.fill, k.stroke, k.dash)} {k.label}</div>
+            ))}
+            <div>{box("#fff", PALETTE.hot, undefined, 2.5)} DLQ hot</div>
+            <div>{box("#fff", PALETTE.sel, undefined, 2.5)} Selected</div>
+          </div>
+          <div className="legend-col">
+            <div>{line(PALETTE.edge)} trigger / publish</div>
+            <div>{line(PALETTE.inject)} inject</div>
+            <div>{line(PALETTE.edge, "2 4")} inferred</div>
+            <div>{line(PALETTE.edge, "8 5")} cloud</div>
+            <div>{line(PALETTE.back)} back-edge (upward)</div>
+            <div><code>a 3 · DLQ 7</code> active · dead-letter</div>
+            <div><span style={{ color: PALETTE.attached }}>●</span> attached <span style={{ color: PALETTE.detached }}>○</span> not attached</div>
+            <div className="muted">drag node · drag canvas pans · wheel zooms</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type PosMap = Record<string, { x: number; y: number }>;
 type View = { x: number; y: number; k: number };
 
@@ -246,6 +308,7 @@ export default function FlowTab() {
     }
   };
 
+  const layers = useMemo(() => (data ? computeLayers(data.nodes, visibleEdges) : {}), [data, visibleEdges]);
   const sel = data?.nodes.find((n) => n.id === selected);
 
   return (
@@ -266,12 +329,7 @@ export default function FlowTab() {
           {resetting ? "Resetting…" : "Reset layout"}
         </button>
         <span className="spacer" />
-        <span className="legend">
-          <i className="l-solid" />
-          trigger/publish <i className="l-dot" />
-          inferred <i className="l-dash" />
-          cloud · drag nodes · drag canvas to pan · wheel to zoom
-        </span>
+
         <button className="primary" onClick={() => setPickerOpen(true)}>
           Inject sample…
         </button>
@@ -292,6 +350,7 @@ export default function FlowTab() {
       {loading && <Empty>Loading flow…</Empty>}
       {data && (
         <div className="flow-wrap">
+          <div className="flow-canvas">
           <svg
             ref={svgRef}
             className="flow"
@@ -302,7 +361,10 @@ export default function FlowTab() {
           >
             <defs>
               <marker id="arr" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                <path d="M0,0L10,5L0,10z" fill="#94a3b8" />
+                <path d="M0,0L10,5L0,10z" fill={PALETTE.edge} />
+              </marker>
+              <marker id="arrBack" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                <path d="M0,0L10,5L0,10z" fill={PALETTE.back} />
               </marker>
               <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
                 <circle cx="1" cy="1" r="1" fill="#d7dde6" />
@@ -315,10 +377,11 @@ export default function FlowTab() {
                 b = pos[e.to];
               if (!a || !b) return null;
               const d = edgePath(a, b);
-              const cls = `edge ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
+              const back = layers[e.to] !== undefined && layers[e.to] <= layers[e.from];
+              const cls = `edge${back ? " back" : ""} ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
               return (
                 <g key={e.id}>
-                  <path d={d} className={cls} markerEnd="url(#arr)">
+                  <path d={d} className={cls} markerEnd={back ? "url(#arrBack)" : "url(#arr)"}>
                     <title>{`${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]`}</title>
                   </path>
                 </g>
@@ -342,15 +405,25 @@ export default function FlowTab() {
                       ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
                       : `${n.label} · drag to move`}
                   </title>
-                  <rect width={W} height={H} rx={n.kind === "app" ? 8 : 3} />
+                  <rect
+                    width={W}
+                    height={H}
+                    rx={n.kind === "app" ? 8 : 3}
+                    style={{
+                      fill: kindStyle(n.kind).fill,
+                      stroke: selected === n.id ? PALETTE.sel : hot ? PALETTE.hot : kindStyle(n.kind).stroke,
+                      strokeWidth: selected === n.id || hot ? 2.5 : 1.2,
+                      strokeDasharray: kindStyle(n.kind).dash,
+                    }}
+                  />
                   <text x={8} y={17} className="t1">
                     {n.label}
                   </text>
                   <text x={8} y={33} className="t2">
                     {n.app
                       ? n.app.attached
-                        ? "● attached"
-                        : "○ not attached"
+                        ? <tspan fill={PALETTE.attached}>● attached</tspan>
+                        : <tspan fill={PALETTE.detached}>○ not attached</tspan>
                       : c
                         ? countsLabel(c)
                         : n.kind}
@@ -360,6 +433,8 @@ export default function FlowTab() {
             })}
             </g>
           </svg>
+          <FlowLegend />
+          </div>
           <aside className="side-panel">
             {!sel && <Empty>Select or drag a node.</Empty>}
             {sel && (
