@@ -4,7 +4,7 @@ Render **Web Service** front door for DSP Dev Overview (ADR-006): Entra ID OIDC 
 
 Routes: `/healthz` (public) → `/auth/login|callback|logout` (public) → `requireAuth` (HTML → 302 `/auth/login`, `/api` → 401) → `/upstream-status` + `/api/*` proxy (strips Authorization/Cookie/inbound `X-Dsp-Box-Key`, adds `X-Overview-User`; upstream per ADDENDA-006 below) → static `web/dist` → SPA fallback.
 
-Callback enforces state, nonce, PKCE, `tid === AZURE_AD_TENANT_ID`, `ALLOWED_EMAILS`, and `session.regenerate()`.
+Callback enforces state, nonce, PKCE, `tid === AZURE_AD_TENANT_ID`, `ALLOWED_EMAILS`, then replaces the session. Session = signed cookie (`cookie-session`, HMAC with `SESSION_SECRET`, 8 h server-side expiry via `iat`), so deploys/restarts no longer log users out (the old in-memory store did). Rotating `SESSION_SECRET` logs everyone out. The SPA redirects to `/auth/login` once on a 401 `UNAUTHENTICATED`.
 
 ## Env
 | Var | Value |

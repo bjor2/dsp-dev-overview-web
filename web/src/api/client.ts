@@ -53,11 +53,17 @@ async function reqOnce<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     let parsed: ApiErrorBody | null = null;
     try { parsed = await res.json(); } catch { /* not json */ }
+    // Front-door session gone (logout elsewhere / expiry): re-login once instead of polling 401s. Entra SSO makes it silent.
+    if (res.status === 401 && (parsed as { error?: unknown } | null)?.error === "UNAUTHENTICATED" && !sessionStorage.getItem("dsp.relogin")) {
+      sessionStorage.setItem("dsp.relogin", "1");
+      window.location.assign("/auth/login");
+    }
     if (parsed?.error?.code === "BOX_OFFLINE") window.dispatchEvent(new Event("dsp:box-offline")); // UpstreamBanner refresh
     if (parsed?.error) throw new ApiError(res.status, parsed.error.code, parsed.error.message, parsed.error.retryable);
     // Vite proxy returns 500/502/504 when :5090 is down
     throw new ApiError(res.status, res.status >= 500 ? "API_UNREACHABLE" : "HTTP_" + res.status, `HTTP ${res.status} ${res.statusText}`, res.status >= 500);
   }
+  sessionStorage.removeItem("dsp.relogin");
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }

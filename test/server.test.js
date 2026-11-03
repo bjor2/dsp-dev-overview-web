@@ -130,3 +130,42 @@ test("session for a non-allowlisted email is 403", async () => {
   const s = await serve(baseEnv, { fetch: fakeFetch(), testUser: { email: "someone@else.test" } });
   try { assert.equal((await fetch(`${s.base}/api/projects`)).status, 403); } finally { await s.close(); }
 });
+
+// --- Session durability (SMOKE-render-upstream-20261103-1108: 401s after each deploy wiped MemoryStore) ---
+import { createHmac } from "node:crypto";
+function sessionCookie(secret, data) {
+  const value = Buffer.from(JSON.stringify(data)).toString("base64");
+  const sig = createHmac("sha1", secret).update(`dsp.sid=${value}`).digest("base64").replace(/\//g, "_").replace(/\+/g, "-").replace(/=+$/, "");
+  return `dsp.sid=${value}; dsp.sid.sig=${sig}`;
+}
+
+test("signed session survives an app restart (new process, same SESSION_SECRET)", async () => {
+  const cookie = sessionCookie("s", { user: { ...user, iat: Date.now() } });
+  for (let i = 0; i < 2; i++) { // two separate app instances = deploy/restart
+    const s = await serve({ ...baseEnv, API_UPSTREAM_MODE: "render" }, { fetch: fakeFetch() });
+    try {
+      const r = await fetch(`${s.base}/api/projects`, { headers: { cookie } });
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("x-dsp-upstream"), "render");
+    } finally { await s.close(); }
+  }
+});
+
+test("concurrent first requests with a valid cookie all pass", async () => {
+  const cookie = sessionCookie("s", { user: { ...user, iat: Date.now() } });
+  const s = await serve({ ...baseEnv, API_UPSTREAM_MODE: "render" }, { fetch: fakeFetch() });
+  try {
+    const rs = await Promise.all(Array.from({ length: 8 }, (_, i) => fetch(`${s.base}/api/projects/customerproject.dev/${i % 2 ? "sb/entities" : "flow"}`, { headers: { cookie } })));
+    assert.deepEqual(rs.map((r) => r.status), Array(8).fill(200));
+  } finally { await s.close(); }
+});
+
+test("tampered, wrong-secret or expired session cookie → 401", async () => {
+  const s = await serve({ ...baseEnv, API_UPSTREAM_MODE: "render" }, { fetch: fakeFetch() });
+  try {
+    const good = sessionCookie("s", { user: { ...user, iat: Date.now() } });
+    const forged = good.replace(/dsp\.sid=[^;]+/, `dsp.sid=${Buffer.from(JSON.stringify({ user: { email: "x@evil.test", iat: Date.now() } })).toString("base64")}`);
+    for (const cookie of [forged, sessionCookie("other", { user: { ...user, iat: Date.now() } }), sessionCookie("s", { user: { ...user, iat: Date.now() - 9 * 3600e3 } }), sessionCookie("s", { user })])
+      assert.equal((await fetch(`${s.base}/api/projects`, { headers: { cookie } })).status, 401);
+  } finally { await s.close(); }
+});

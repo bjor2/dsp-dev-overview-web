@@ -1,6 +1,6 @@
 // DSP Dev Overview front door (ADR-006): Entra OIDC (confidential, code+PKCE) + session + /api proxy + SPA.
 import express from "express";
-import session from "express-session";
+import cookieSession from "cookie-session";
 import helmet from "helmet";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,16 +56,23 @@ app.use(helmet({ contentSecurityPolicy: false }));
 
 app.get("/healthz", (_req, res) => res.type("text").send("ok"));
 
-app.use(session({
+// Signed cookie session (HMAC with SESSION_SECRET), not the in-memory store: every Render deploy/restart wiped
+// MemoryStore, so open tabs got 401 on their next poll (SMOKE-render-upstream-20261103-1108). The cookie holds only
+// {email,name,oid,tid,iat} / the OIDC login nonce; tampering fails the signature. Server-side 8 h expiry via iat.
+const SESSION_MAX_MS = 8 * 3600 * 1000;
+app.use(cookieSession({
   name: "dsp.sid",
-  secret: env.SESSION_SECRET || "dev-only-insecure-secret",
-  resave: false,
-  saveUninitialized: false,
-  cookie: { httpOnly: true, secure: PROD, sameSite: "lax", maxAge: 8 * 3600 * 1000 },
+  keys: [env.SESSION_SECRET || "dev-only-insecure-secret"],
+  httpOnly: true, secure: PROD, sameSite: "lax", maxAge: SESSION_MAX_MS,
 }));
+app.use((req, _res, next) => {
+  const u = req.session?.user;
+  if (u && !(typeof u.iat === "number" && Date.now() - u.iat < SESSION_MAX_MS)) delete req.session.user;
+  next();
+});
 
 // Tests only (never from env): pretend an OIDC session exists.
-if (deps.testUser) app.use((req, _res, next) => { req.session.user ??= deps.testUser; next(); });
+if (deps.testUser) app.use((req, _res, next) => { req.session.user ??= { iat: Date.now(), ...deps.testUser }; next(); });
 
 const page = (res, code, msg) => res.status(code).type("html").send(`<!doctype html><title>DSP Dev Overview</title><p>${msg}</p>`);
 
@@ -83,7 +90,7 @@ app.get("/auth/login", async (req, res, next) => {
       code_challenge_method: "S256",
       state, nonce, response_mode: "query",
     });
-    req.session.save((err) => (err ? next(err) : res.redirect(url)));
+    res.redirect(url); // cookie-session writes the Set-Cookie with this response
   } catch (e) { next(e); }
 });
 
@@ -102,21 +109,17 @@ app.get("/auth/callback", async (req, res, next) => {
     const email = String(c.email || c.preferred_username || "").toLowerCase();
     if (ALLOWLIST_MISSING) { log.error("[config] login rejected: ALLOWED_EMAILS empty"); return page(res, 403, "Not allowed (allowlist not configured)."); }
     if (!ALLOWED.includes(email)) return page(res, 403, "Not allowed.");
-    req.session.regenerate((err) => {
-      if (err) return next(err);
-      req.session.user = { email, name: c.name, oid: c.oid, tid: c.tid };
-      wakeApi();
-      req.session.save((e2) => (e2 ? next(e2) : res.redirect("/")));
-    });
+    // Replace the whole session (no fixation: new signed cookie, login nonce dropped).
+    req.session = { user: { email, name: c.name, oid: c.oid, tid: c.tid, iat: Date.now() } };
+    wakeApi();
+    res.redirect("/");
   } catch (e) { log.error("[auth] callback failed:", e.message); page(res, 401, 'Login failed. <a href="/auth/login">Try again</a>.'); }
 });
 
 const logout = (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie("dsp.sid");
-    if (!TENANT) return res.redirect("/");
-    res.redirect(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(PUBLIC_BASE_URL + "/")}`);
-  });
+  req.session = null;
+  if (!TENANT) return res.redirect("/");
+  res.redirect(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(PUBLIC_BASE_URL + "/")}`);
 };
 app.get("/auth/logout", logout);
 app.post("/auth/logout", logout);
