@@ -8,23 +8,60 @@ export interface ProjectSummary {
   traceItUrl?: string;
 }
 export type Scope = "local" | "cloud" | "both";
-export type NodeKind = "app" | "queue" | "topic" | "subscription" | "external";
+/** v2 (ADDENDA-008): `handler` replaces `app`; `app` is kept so v1 payloads/demo data still type-check. */
+export type NodeKind = "handler" | "queue" | "topic" | "subscription" | "external" | "app";
+export interface FlowAppInfo { appKind?: string; port?: number; cloudRoleName?: string; attached?: boolean }
+/** v2: apps are containers; resource containers carry `app`. `position` is ABSOLUTE and only present when stored. */
+export interface FlowContainer {
+  id: string; label: string; kind: "resource" | "logical";
+  resourceRefs: string[];
+  app?: FlowAppInfo;
+  scope?: Scope;
+  position?: { x: number; y: number };
+  /** Hint only; the UI recomputes from children + padding. Never sent by the API. */
+  size?: { w: number; h: number };
+}
+/** OQ-1: self-requeue is a badge on the handler, not an edge. */
+export interface SelfRequeue { entityId: string; messages?: string[]; sources?: string[] }
+export interface HandlerInfo {
+  /** §11: singular; omitted for `*.http`. `functions[]` (§6 draft) is accepted as a fallback. */
+  function?: string;
+  functions?: string[];
+  triggerEntityIds?: string[];
+  selfRequeue: SelfRequeue[];
+}
 export interface FlowNode {
   id: string; kind: NodeKind; label: string; scope: Scope;
+  /** v1 only (`kind: "app"`). v2 puts apps in `FlowGraph.containers[].app`. */
   app?: { appKind: "web" | "func" | "func-ingress"; port?: number; cloudRoleName?: string; attached: boolean };
   /** dlqHot = deadLetterCount !== null && deadLetterCount > 0 only (ADDENDA-003). Never derive from near-maxDeliveryCount. */
   sb?: { activeCount: number | null; deadLetterCount: number | null; dlqHot: boolean; owner: "project" | "shared"; maxDeliveryCount?: number | null };
+  /** Handlers only. Absent when the container is hidden in the current scope. */
+  containerId?: string;
+  handler?: HandlerInfo;
+  /** Handlers: RELATIVE to the container origin. Containers/standalone nodes: absolute. Only when stored. */
   position?: { x: number; y: number };
 }
 export type EdgeKind = "trigger" | "publish" | "subscription" | "forward" | "inject";
 export interface FlowEdge {
   id: string; from: string; to: string; kind: EdgeKind; label?: string; scope: Scope;
   confidence: "code" | "terraform" | "inferred-from-settings" | "manual";
+  /** v2: code locations (`file:line`) the edge was derived from. */
+  sources?: string[];
 }
+export interface LayoutHints { containerPadding: number; innerDirection: "LR" | "TB" }
 export interface FlowGraph {
-  projectId: string; layout: "auto" | "stored"; direction: "LR" | "TB";
+  projectId: string;
+  /** Absent on v1 payloads (upgraded in memory by the API, which then adds a REGISTRATION_V1_UPGRADED warning). */
+  schemaVersion?: number;
+  /** auto = nothing stored · partial = some stored (pin those) · stored = every visible node + container stored. Informational. */
+  layout: "auto" | "partial" | "stored";
+  direction: "LR" | "TB";
+  layoutHints?: LayoutHints;
+  /** v2 only; empty/absent on v1. */
+  containers?: FlowContainer[];
   nodes: FlowNode[]; edges: FlowEdge[];
-  /** Non-fatal notes (e.g. SB_UNREACHABLE, FLOW_POSITIONS_UNREADABLE). Graph still returns. */
+  /** Non-fatal notes (e.g. SB_UNREACHABLE, FLOW_POSITIONS_UNREADABLE, REGISTRATION_V1_UPGRADED). Graph still returns. */
   warnings?: string[];
 }
 
