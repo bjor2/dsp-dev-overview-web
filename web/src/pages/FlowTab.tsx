@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useParams } from "react-router-dom";
-import { API_BASE, api } from "../api/client";
+import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner } from "../components/common";
 import SampleMessagePicker from "../components/SampleMessagePicker";
 import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
+import { clearLocalPositions, loadLocalPositions, mergeLocalPositions, storageKey } from "./flow/localPositions";
 import type { FlowEdge } from "../api/types";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
@@ -101,8 +102,6 @@ type Drag = {
   pointerId: number;
   el: Element;
 };
-const POSITIONS_PATH = (projectId: string) => `${API_BASE}/projects/${encodeURIComponent(projectId)}/flow/positions`;
-
 const edgeTooltip = (e: FlowEdge) =>
   `${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]` +
   (e.sources?.length ? "\n" + e.sources.map((s) => "  " + s).join("\n") : "");
@@ -126,8 +125,6 @@ export default function FlowTab() {
   const drag = useRef<Drag | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const legendRef = useRef<HTMLDivElement | null>(null);
-  const saveTimer = useRef<number | null>(null);
-  const pending = useRef<PosMap>({});
   const scope = showCloud ? "all" : "local";
   const { data, error, loading, reload } = useApi(() => api.flow(projectId, scope), demoFlow, [projectId, scope]);
   const { counts, updatedAt, refresh } = useFlowCounts(projectId);
@@ -142,6 +139,12 @@ export default function FlowTab() {
   }, [projectId]);
 
   const graph = useMemo(() => (data ? normalizeGraph(data) : null), [data]);
+  /** localStorage key for this project + env (dsp-flow-pos:v2:{project}:{env}); the ref is for drag-end / unload writes. */
+  const posKey = useMemo(() => storageKey(projectId, graph), [projectId, graph]);
+  const posKeyRef = useRef(posKey);
+  posKeyRef.current = posKey;
+  /** Ids whose position came from localStorage (shown in the toolbar indicator). */
+  const [localCount, setLocalCount] = useState(0);
   const pad = graph?.layoutHints.containerPadding ?? 16;
   const visibleEdges = useMemo(
     () => (graph?.edges ?? []).filter((e) => showCloud || e.scope !== "cloud"),
@@ -207,12 +210,21 @@ export default function FlowTab() {
     return () => svg.removeEventListener("wheel", onWheel);
   }, [zoomAt, data]);
 
-  // Rebuild positions only when the graph is (re)fetched. Stored (wire) positions are pinned verbatim, moved items
-  // keep their local position, only auto-laid items are de-overlapped — and NOTHING here is persisted, so nudged
-  // defaults never overwrite stored keys. Fit only when requested (first load / Reset / project change).
+  // Rebuild positions only when the graph is (re)fetched. Precedence: this browser's localStorage positions, then
+  // the server's (wire) positions for ids missing there, then auto-layout. Local + stored + moved items are pinned
+  // verbatim, only auto-laid items are de-overlapped — and NOTHING here is persisted (never write on load), so
+  // nudged defaults never end up in localStorage. Fit only when requested (first load / Reset / project change).
   useEffect(() => {
     if (!graph) return;
-    const { pos: next, geo: g } = settleLayout(graph, visibleEdges, posRef.current, moved.current);
+    const local = loadLocalPositions(posKey, graph); // unknown ids already dropped
+    const prev: PosMap = { ...posRef.current };
+    const pin = new Set(moved.current);
+    for (const [id, p] of Object.entries(local)) {
+      if (!moved.current.has(id)) prev[id] = p; // a drag this session wins over the stored copy
+      pin.add(id);
+    }
+    setLocalCount(Object.keys(local).length);
+    const { pos: next, geo: g } = settleLayout(graph, visibleEdges, prev, pin);
     posRef.current = next;
     setPos(next);
     if (needFit.current) {
@@ -221,43 +233,26 @@ export default function FlowTab() {
       requestAnimationFrame(() => fitView(rects));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, visibleEdges]);
+  }, [graph, visibleEdges, posKey]);
 
   /**
-   * Send whatever is queued for `pid` right now. `keepalive` lets the PUT outlive the page (pagehide / F5 /
-   * tab close), which a plain debounced request does not; same URL + body as api.saveFlowPositions.
+   * Write every key dragged this session (from the in-memory map, wire frame) into localStorage under `key`,
+   * merged over what is already stored there. No-op when nothing was dragged, so a plain load never writes.
+   * Drags are NOT sent to the server any more: positions live in this browser only.
    */
-  const flush = useCallback((pid: string, keepalive = false) => {
-    if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
-    const batch = pending.current;
-    if (!Object.keys(batch).length) return;
-    pending.current = {};
-    if (keepalive) {
-      fetch(POSITIONS_PATH(pid), {
-        method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify(batch),
-      }).catch(() => { /* page is going away */ });
-    } else {
-      api.saveFlowPositions(pid, batch).catch(() => {
-        /* keep local; the next drag of that item re-sends its key */
-      });
-    }
+  const flushLocal = useCallback((key: string) => {
+    const ids = [...moved.current];
+    if (!ids.length) return;
+    const patch: PosMap = {};
+    for (const id of ids) if (posRef.current[id]) patch[id] = posRef.current[id];
+    mergeLocalPositions(key, patch);
   }, []);
 
-  // Only the dragged key is sent (container absolute / inner relative / other absolute), debounced per burst.
-  const persist = useCallback(
-    (id: string, xy: XY) => {
-      pending.current[id] = { x: xy.x, y: xy.y };
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => flush(projectId), 350);
-    },
-    [projectId, flush],
-  );
-
-  // A pending debounce must not die with the page or the component: flush on pagehide/beforeunload/tab hidden
-  // (keepalive) and on unmount / project switch (the cleanup closes over the OLD projectId).
+  // Drag-end already writes; these are the safety net for a drag whose write got lost: pagehide / beforeunload /
+  // tab hidden, and unmount / project switch (the cleanup closes over the OLD key, before `moved` is reset).
   useEffect(() => {
-    const onHide = () => flush(projectId, true);
-    const onVis = () => { if (document.visibilityState === "hidden") flush(projectId, true); };
+    const onHide = () => flushLocal(posKey);
+    const onVis = () => { if (document.visibilityState === "hidden") flushLocal(posKey); };
     window.addEventListener("pagehide", onHide);
     window.addEventListener("beforeunload", onHide);
     document.addEventListener("visibilitychange", onVis);
@@ -265,9 +260,9 @@ export default function FlowTab() {
       window.removeEventListener("pagehide", onHide);
       window.removeEventListener("beforeunload", onHide);
       document.removeEventListener("visibilitychange", onVis);
-      flush(projectId, true);
+      flushLocal(posKey);
     };
-  }, [projectId, flush]);
+  }, [posKey, flushLocal]);
 
   // Pan: window listeners from pointerdown on the background until pointerup, absolute delta from the start.
   const onBgPointerDown = (e: React.PointerEvent) => {
@@ -304,7 +299,9 @@ export default function FlowTab() {
     const cur: PosMap = { ...posRef.current, [d.id]: final };
     posRef.current = cur;
     setPos(cur);
-    persist(d.id, final); // exact graph id: "container:…" for boxes, node id otherwise
+    // Exact graph id ("container:…" for boxes, node id otherwise) merged into this browser's localStorage map.
+    mergeLocalPositions(posKeyRef.current, { [d.id]: final });
+    setLocalCount(Object.keys(loadLocalPositions(posKeyRef.current, graph)).length);
   };
 
   const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
@@ -350,23 +347,22 @@ export default function FlowTab() {
   };
 
   /**
-   * Reset = back to the checked-in default layout (ADDENDA-008 option C): PUT {} clears this env's runtime
-   * store, then /flow is re-fetched and its positions REPLACE every local position (nothing dragged this
-   * session survives: the moved-set and the local map are cleared before the fresh graph is settled and fitted).
+   * Reset = back to the server's default layout: this browser's localStorage key is removed, PUT {} clears any
+   * legacy server-side store (best-effort, errors ignored), then /flow is re-fetched and its positions REPLACE
+   * every local position (nothing dragged this session survives: the moved-set and the in-memory map are cleared
+   * before the fresh graph is settled and fitted).
    */
   const resetLayout = async () => {
     setConfirmReset(false);
     setResetting(true);
     try {
-      // Drop queued/in-flight drags so they can't re-apply after the reset.
-      if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
-      pending.current = {};
       drag.current = null;
-      await api.saveFlowPositions(projectId, {});
-      moved.current = new Set();
+      moved.current = new Set(); // cleared first so the unload safety net cannot re-write the dropped keys
+      clearLocalPositions(posKey);
+      await api.saveFlowPositions(projectId, {}).catch(() => { /* server store is optional now */ });
       posRef.current = {};
       needFit.current = true;
-      reload(); // fresh /flow → settleLayout with no moved ids and no previous map → defaults → fit
+      reload(); // fresh /flow → settleLayout with no moved ids, no local map, no previous map → defaults → fit
     } finally {
       setResetting(false);
     }
@@ -376,8 +372,8 @@ export default function FlowTab() {
     const items = [...(graph?.containers ?? []), ...(graph?.nodes ?? [])].filter((i) => i.position);
     const stored = items.filter((i) => i.positionSource === "stored").length;
     const dflt = items.filter((i) => i.positionSource === "default").length;
-    return { total: items.length, stored, default: dflt };
-  }, [graph]);
+    return { total: items.length, stored, default: dflt, local: localCount };
+  }, [graph, localCount]);
 
   const layers = useMemo(() => (graph ? computeLayers(graph.nodes.map((n) => n.id), visibleEdges) : {}), [graph, visibleEdges]);
   const sel = graph?.nodes.find((n) => n.id === selected);
@@ -481,9 +477,9 @@ export default function FlowTab() {
         <span className="muted zoom-pct">{Math.round(view.k * 100)}%</span>
         {updatedAt && <span className="muted">counts {updatedAt.toLocaleTimeString()}</span>}
         {graph && (
-          <span className="muted layout-stat" title={`layout ${graph.layout} · ${positionStats.total} positions (${positionStats.stored} stored this env, ${positionStats.default} checked-in default)`}>
+          <span className="muted layout-stat" title={`layout ${graph.layout} · ${positionStats.total} positions (${positionStats.local} moved in this browser, ${positionStats.stored} stored on the server, ${positionStats.default} checked-in default)`}>
             layout {graph.layout} · {positionStats.total} positions
-            {positionStats.stored > 0 ? ` (${positionStats.stored} stored)` : ""}
+            {positionStats.local > 0 ? ` (${positionStats.local} local)` : positionStats.stored > 0 ? ` (${positionStats.stored} stored)` : ""}
           </span>
         )}
         {confirmReset ? (
@@ -493,7 +489,7 @@ export default function FlowTab() {
             <button type="button" onClick={() => setConfirmReset(false)}>Cancel</button>
           </span>
         ) : (
-          <button type="button" onClick={() => setConfirmReset(true)} disabled={resetting} title="Asks first; PUT {} drops this env's saved positions and returns to the checked-in default layout">
+          <button type="button" onClick={() => setConfirmReset(true)} disabled={resetting} title="Asks first; forgets the positions saved in this browser (and any server-side ones) and returns to the default layout">
             {resetting ? "Resetting…" : "Reset layout"}
           </button>
         )}
