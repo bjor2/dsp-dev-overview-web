@@ -18,6 +18,8 @@ export interface FlowContainer {
   app?: FlowAppInfo;
   scope?: Scope;
   position?: { x: number; y: number };
+  /** Option C: where `position` came from — the checked-in registration defaults or this env's runtime store. */
+  positionSource?: "default" | "stored";
   /** Hint only; the UI recomputes from children + padding. Never sent by the API. */
   size?: { w: number; h: number };
 }
@@ -41,6 +43,8 @@ export interface FlowNode {
   handler?: HandlerInfo;
   /** Handlers: RELATIVE to the container origin. Containers/standalone nodes: absolute. Only when stored. */
   position?: { x: number; y: number };
+  /** Option C: where `position` came from — the checked-in registration defaults or this env's runtime store. */
+  positionSource?: "default" | "stored";
 }
 export type EdgeKind = "trigger" | "publish" | "subscription" | "forward" | "inject";
 export interface FlowEdge {

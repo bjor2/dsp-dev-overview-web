@@ -11,8 +11,7 @@ import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
 import type { FlowEdge } from "../api/types";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
-  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath,
-  innerMin, nodeRect, nudgeOffOverlaps, settleLayout,
+  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, settleLayout,
 } from "./flow/layout";
 
 const ZMIN = 0.2, ZMAX = 3;
@@ -123,6 +122,7 @@ export default function FlowTab() {
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const pan = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const drag = useRef<Drag | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const legendRef = useRef<HTMLDivElement | null>(null);
@@ -296,32 +296,23 @@ export default function FlowTab() {
     drag.current = null;
     try { d.el.releasePointerCapture?.(d.pointerId); } catch { /* already released */ }
     if (!d.last || !graph) return;
-    // Settle from the drag's own last position, not from React state: the last pointermove may not be rendered yet.
-    const cur: PosMap = { ...posRef.current, [d.id]: d.last };
-    const g = deriveGeometry(graph, cur);
-    let np: XY | null = null;
-    if (d.kind === "container") {
-      const r = g.boxes[d.id];
-      if (r) np = nudgeOffOverlaps(r, g.topRects.filter((o) => o.id !== d.id));
-    } else if (d.base) {
-      const cid = g.containerOf[d.id];
-      const siblings = graph.nodes.filter((n) => n.containerId === cid && n.id !== d.id && cur[n.id]).map((n) => nodeRect(n.id, cur[n.id]));
-      np = nudgeOffOverlaps(nodeRect(d.id, cur[d.id]), siblings, 12, innerMin(pad));
-    } else {
-      const r = g.topRects.find((x) => x.id === d.id);
-      if (r) np = nudgeOffOverlaps(r, g.topRects.filter((o) => o.id !== d.id));
-    }
-    const final = np ?? cur[d.id];
-    const next = { ...cur, [d.id]: final };
-    posRef.current = next;
-    setPos(next);
+    // The drop position is exactly where the user let go: `origin + (client − clientStart) / k`, computed once from
+    // the drag-start snapshot (inner nodes only clamped inside their box). No de-overlap nudge here: it used to snap a
+    // box that landed on another unit to the far side of that unit (a 150px drag to the right became a 218px drop).
+    // Read the drag's own last position, not React state: the last pointermove may not be rendered yet.
+    const final = d.last;
+    const cur: PosMap = { ...posRef.current, [d.id]: final };
+    posRef.current = cur;
+    setPos(cur);
     persist(d.id, final); // exact graph id: "container:…" for boxes, node id otherwise
   };
 
   const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
     e.stopPropagation();
-    if (e.button !== 0 || drag.current) return;
+    if (e.button !== 0 || drag.current || resetting) return;
     e.preventDefault();
+    // Box origin == the container's stored position (deriveGeometry puts the box at pos[c.id]; header and padding
+    // are drawn INSIDE the box), so the drag target is the wire position with no header/padding offset added.
     const origin = kind === "container" ? geo.boxes[id] : geo.absPos[id];
     if (!origin) return;
     const cid = kind === "node" ? geo.containerOf[id] : undefined;
@@ -358,23 +349,35 @@ export default function FlowTab() {
     setSelected(id);
   };
 
+  /**
+   * Reset = back to the checked-in default layout (ADDENDA-008 option C): PUT {} clears this env's runtime
+   * store, then /flow is re-fetched and its positions REPLACE every local position (nothing dragged this
+   * session survives: the moved-set and the local map are cleared before the fresh graph is settled and fitted).
+   */
   const resetLayout = async () => {
-    if (!window.confirm("Reset the Flow layout? All saved node and box positions for this project/env are replaced by the default layout.")) return;
+    setConfirmReset(false);
     setResetting(true);
     try {
-      // Drop queued drags so they can't re-apply after the reset.
+      // Drop queued/in-flight drags so they can't re-apply after the reset.
       if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
       pending.current = {};
-      // {} = reset. The API may return checked-in defaults rather than empty, so we re-fetch /flow
-      // and use whatever positions it returns.
+      drag.current = null;
       await api.saveFlowPositions(projectId, {});
       moved.current = new Set();
+      posRef.current = {};
       needFit.current = true;
-      reload(); // reload → auto layout → fit
+      reload(); // fresh /flow → settleLayout with no moved ids and no previous map → defaults → fit
     } finally {
       setResetting(false);
     }
   };
+  /** "stored" / "default" counts for the toolbar indicator. */
+  const positionStats = useMemo(() => {
+    const items = [...(graph?.containers ?? []), ...(graph?.nodes ?? [])].filter((i) => i.position);
+    const stored = items.filter((i) => i.positionSource === "stored").length;
+    const dflt = items.filter((i) => i.positionSource === "default").length;
+    return { total: items.length, stored, default: dflt };
+  }, [graph]);
 
   const layers = useMemo(() => (graph ? computeLayers(graph.nodes.map((n) => n.id), visibleEdges) : {}), [graph, visibleEdges]);
   const sel = graph?.nodes.find((n) => n.id === selected);
@@ -399,7 +402,10 @@ export default function FlowTab() {
         transform={`translate(${b.x},${b.y})`}
         onPointerDown={(e) => beginDrag(e, c.id, "container")}
       >
-        <title>{`${c.label} · ${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag to move with its nodes`}</title>
+        <title>{`${c.label} · ${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`}</title>
+        {/* The body is pass-through (CSS pointer-events: none): only the header band grabs the pointer, so a box that
+            overlaps another can never steal a drag aimed at the header underneath it (that is how a "Functions header"
+            drag ended up moving the Ingress box). */}
         <rect className="box" width={b.w} height={b.h} rx={10} />
         <path className="hdr" d={headerPath(b.w)} />
         <text x={10} y={HDR - 8} className="c1">{c.label}</text>
@@ -474,9 +480,23 @@ export default function FlowTab() {
         <button type="button" onClick={() => zoomAt(1.2)} title="Zoom in">+</button>
         <span className="muted zoom-pct">{Math.round(view.k * 100)}%</span>
         {updatedAt && <span className="muted">counts {updatedAt.toLocaleTimeString()}</span>}
-        <button type="button" onClick={resetLayout} disabled={resetting} title="Asks first; PUT {} resets stored positions to the default layout">
-          {resetting ? "Resetting…" : "Reset layout"}
-        </button>
+        {graph && (
+          <span className="muted layout-stat" title={`layout ${graph.layout} · ${positionStats.total} positions (${positionStats.stored} stored this env, ${positionStats.default} checked-in default)`}>
+            layout {graph.layout} · {positionStats.total} positions
+            {positionStats.stored > 0 ? ` (${positionStats.stored} stored)` : ""}
+          </span>
+        )}
+        {confirmReset ? (
+          <span className="inline-confirm" role="alertdialog" aria-label="Reset positions?">
+            Reset positions?
+            <button type="button" className="danger" onClick={resetLayout}>Yes</button>
+            <button type="button" onClick={() => setConfirmReset(false)}>Cancel</button>
+          </span>
+        ) : (
+          <button type="button" onClick={() => setConfirmReset(true)} disabled={resetting} title="Asks first; PUT {} drops this env's saved positions and returns to the checked-in default layout">
+            {resetting ? "Resetting…" : "Reset layout"}
+          </button>
+        )}
         <span className="spacer" />
 
         <button className="primary" onClick={() => setPickerOpen(true)}>
