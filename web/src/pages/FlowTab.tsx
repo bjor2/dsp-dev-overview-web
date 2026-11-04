@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { API_BASE, api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner } from "../components/common";
@@ -12,7 +12,7 @@ import type { FlowEdge } from "../api/types";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
   EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath,
-  innerMin, layoutGraph, nodeRect, nudgeOffOverlaps,
+  innerMin, nodeRect, nudgeOffOverlaps, settleLayout,
 } from "./flow/layout";
 
 const ZMIN = 0.2, ZMAX = 3;
@@ -84,7 +84,25 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
 }
 
 type View = { x: number; y: number; k: number };
-type Drag = { id: string; kind: "node" | "container"; ox: number; oy: number; moved: boolean };
+/**
+ * One drag, tracked on window listeners (not on the element under the pointer): the target is computed as
+ * `origin + (client − clientStart) / k` from the drag START, never incrementally, so coalesced/fast moves land
+ * exactly where the pointer is. `last` is the latest position written to state, in the WIRE frame (containers /
+ * standalone absolute, inner nodes relative to their container) — pointer-up reads this, not React state, because
+ * the final pointermove is often not rendered yet when pointerup arrives.
+ */
+type Drag = {
+  id: string;
+  kind: "node" | "container";
+  sx: number; sy: number; k: number;
+  origin: XY;
+  /** Container origin (absolute) when dragging an inner node. */
+  base?: XY;
+  last: XY | null;
+  pointerId: number;
+  el: Element;
+};
+const POSITIONS_PATH = (projectId: string) => `${API_BASE}/projects/${encodeURIComponent(projectId)}/flow/positions`;
 
 const edgeTooltip = (e: FlowEdge) =>
   `${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]` +
@@ -129,6 +147,16 @@ export default function FlowTab() {
     () => (graph?.edges ?? []).filter((e) => showCloud || e.scope !== "cloud"),
     [graph, showCloud],
   );
+  /** Canvas draws one path per from→to; the side panel still lists every edge. */
+  const drawnEdges = useMemo(() => {
+    const seen = new Set<string>();
+    return visibleEdges.filter((e) => {
+      const key = e.from + "→" + e.to;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [visibleEdges]);
   const geo = useMemo(() => (graph ? deriveGeometry(graph, pos) : EMPTY_GEOMETRY), [graph, pos]);
 
   const fitView = useCallback((rects: Rect[]) => {
@@ -179,39 +207,13 @@ export default function FlowTab() {
     return () => svg.removeEventListener("wheel", onWheel);
   }, [zoomAt, data]);
 
-  // Rebuild positions only when the graph is (re)fetched; keep moved items; fit only when requested.
+  // Rebuild positions only when the graph is (re)fetched. Stored (wire) positions are pinned verbatim, moved items
+  // keep their local position, only auto-laid items are de-overlapped — and NOTHING here is persisted, so nudged
+  // defaults never overwrite stored keys. Fit only when requested (first load / Reset / project change).
   useEffect(() => {
     if (!graph) return;
-    const { pos: auto, pinned } = layoutGraph(graph, visibleEdges);
-    const prev = posRef.current;
-    const next: PosMap = { ...auto };
-    moved.current.forEach((id) => {
-      if (prev[id] && next[id]) next[id] = prev[id];
-    });
-    // De-overlap only items without a stored/moved position (no auto-save on load).
-    const keep = (id: string) => pinned.has(id) || moved.current.has(id);
-    const p = graph.layoutHints.containerPadding;
-    // Inner nodes vs their siblings (relative frame, clamped to the box).
-    for (const c of graph.containers) {
-      const ms = graph.nodes.filter((n) => n.containerId === c.id);
-      for (const n of ms) {
-        if (!next[n.id] || keep(n.id)) continue;
-        const others = ms.filter((o) => o.id !== n.id && next[o.id]).map((o) => nodeRect(o.id, next[o.id]));
-        next[n.id] = nudgeOffOverlaps(nodeRect(n.id, next[n.id]), others, 12, innerMin(p));
-      }
-    }
-    // Top level: containers as units vs standalone nodes.
-    let g = deriveGeometry(graph, next);
-    for (const r0 of [...g.topRects]) {
-      if (keep(r0.id)) continue;
-      const r = g.topRects.find((x) => x.id === r0.id);
-      if (!r) continue;
-      const np = nudgeOffOverlaps(r, g.topRects.filter((o) => o.id !== r.id));
-      if (np.x !== r.x || np.y !== r.y) {
-        next[r.id] = np;
-        g = deriveGeometry(graph, next);
-      }
-    }
+    const { pos: next, geo: g } = settleLayout(graph, visibleEdges, posRef.current, moved.current);
+    posRef.current = next;
     setPos(next);
     if (needFit.current) {
       needFit.current = false;
@@ -221,99 +223,151 @@ export default function FlowTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, visibleEdges]);
 
-  // Fire-and-forget: only the dragged key is sent (container absolute / inner relative / other absolute).
+  /**
+   * Send whatever is queued for `pid` right now. `keepalive` lets the PUT outlive the page (pagehide / F5 /
+   * tab close), which a plain debounced request does not; same URL + body as api.saveFlowPositions.
+   */
+  const flush = useCallback((pid: string, keepalive = false) => {
+    if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+    const batch = pending.current;
+    if (!Object.keys(batch).length) return;
+    pending.current = {};
+    if (keepalive) {
+      fetch(POSITIONS_PATH(pid), {
+        method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify(batch),
+      }).catch(() => { /* page is going away */ });
+    } else {
+      api.saveFlowPositions(pid, batch).catch(() => {
+        /* keep local; the next drag of that item re-sends its key */
+      });
+    }
+  }, []);
+
+  // Only the dragged key is sent (container absolute / inner relative / other absolute), debounced per burst.
   const persist = useCallback(
     (id: string, xy: XY) => {
-      pending.current[id] = xy;
+      pending.current[id] = { x: xy.x, y: xy.y };
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => {
-        const batch = pending.current;
-        pending.current = {};
-        api.saveFlowPositions(projectId, batch).catch(() => {
-          /* keep local; the next drag of that item re-sends its key */
-        });
-      }, 350);
+      saveTimer.current = window.setTimeout(() => flush(projectId), 350);
     },
-    [projectId],
+    [projectId, flush],
   );
 
-  /** Screen → graph coords through the current pan/zoom. */
-  const clientToSvg = (clientX: number, clientY: number) => {
-    const r = svgRef.current?.getBoundingClientRect();
-    if (!r) return { x: 0, y: 0 };
-    return { x: (clientX - r.left - view.x) / view.k, y: (clientY - r.top - view.y) / view.k };
-  };
+  // A pending debounce must not die with the page or the component: flush on pagehide/beforeunload/tab hidden
+  // (keepalive) and on unmount / project switch (the cleanup closes over the OLD projectId).
+  useEffect(() => {
+    const onHide = () => flush(projectId, true);
+    const onVis = () => { if (document.visibilityState === "hidden") flush(projectId, true); };
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onHide);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+      flush(projectId, true);
+    };
+  }, [projectId, flush]);
 
+  // Pan: window listeners from pointerdown on the background until pointerup, absolute delta from the start.
   const onBgPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    pan.current = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    if (e.button !== 0 || drag.current) return;
+    const pn = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    pan.current = pn;
+    const onMove = (ev: PointerEvent) => setView((v) => ({ ...v, x: pn.vx + ev.clientX - pn.sx, y: pn.vy + ev.clientY - pn.sy }));
+    const onUp = () => {
+      pan.current = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
-  const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.button !== 0) return;
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-    const origin = kind === "container" ? geo.boxes[id] : geo.absPos[id];
-    if (!origin) return;
-    const cur = clientToSvg(e.clientX, e.clientY);
-    drag.current = { id, kind, ox: cur.x - origin.x, oy: cur.y - origin.y, moved: false };
-    setSelected(id);
+  /** Latest drag-frame state → wire-frame position for the dragged id (inner nodes clamped inside their box). */
+  const dragTarget = (d: Drag, clientX: number, clientY: number): XY => {
+    const ax = d.origin.x + (clientX - d.sx) / d.k, ay = d.origin.y + (clientY - d.sy) / d.k;
+    return d.base ? clampInner({ x: ax - d.base.x, y: ay - d.base.y }, pad) : { x: ax, y: ay };
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    const pn = pan.current;
-    if (pn) {
-      setView((v) => ({ ...v, x: pn.vx + e.clientX - pn.sx, y: pn.vy + e.clientY - pn.sy }));
-      return;
-    }
-    const d = drag.current;
-    if (!d) return;
-    const cur = clientToSvg(e.clientX, e.clientY);
-    const ax = cur.x - d.ox, ay = cur.y - d.oy; // absolute target origin
-    d.moved = true;
-    moved.current.add(d.id);
-    const cid = d.kind === "node" ? geo.containerOf[d.id] : undefined;
-    setPos((prev) => {
-      const origin = cid ? prev[cid] : undefined;
-      if (origin) return { ...prev, [d.id]: clampInner({ x: ax - origin.x, y: ay - origin.y }, pad) };
-      return { ...prev, [d.id]: { x: ax, y: ay } };
-    });
-  };
-
-  const onPointerUp = () => {
-    pan.current = null;
-    const d = drag.current;
+  const endDrag = (d: Drag) => {
     drag.current = null;
-    if (!d?.moved || !graph) return;
-    const cur = posRef.current;
-    if (!cur[d.id]) return;
+    try { d.el.releasePointerCapture?.(d.pointerId); } catch { /* already released */ }
+    if (!d.last || !graph) return;
+    // Settle from the drag's own last position, not from React state: the last pointermove may not be rendered yet.
+    const cur: PosMap = { ...posRef.current, [d.id]: d.last };
     const g = deriveGeometry(graph, cur);
     let np: XY | null = null;
-    const cid = d.kind === "node" ? g.containerOf[d.id] : undefined;
     if (d.kind === "container") {
       const r = g.boxes[d.id];
       if (r) np = nudgeOffOverlaps(r, g.topRects.filter((o) => o.id !== d.id));
-    } else if (cid) {
+    } else if (d.base) {
+      const cid = g.containerOf[d.id];
       const siblings = graph.nodes.filter((n) => n.containerId === cid && n.id !== d.id && cur[n.id]).map((n) => nodeRect(n.id, cur[n.id]));
       np = nudgeOffOverlaps(nodeRect(d.id, cur[d.id]), siblings, 12, innerMin(pad));
     } else {
       const r = g.topRects.find((x) => x.id === d.id);
       if (r) np = nudgeOffOverlaps(r, g.topRects.filter((o) => o.id !== d.id));
     }
-    const next = np && (np.x !== cur[d.id].x || np.y !== cur[d.id].y) ? { ...cur, [d.id]: np } : cur;
-    if (next !== cur) {
-      posRef.current = next;
-      setPos(next);
-    }
-    persist(d.id, next[d.id]);
+    const final = np ?? cur[d.id];
+    const next = { ...cur, [d.id]: final };
+    posRef.current = next;
+    setPos(next);
+    persist(d.id, final); // exact graph id: "container:…" for boxes, node id otherwise
+  };
+
+  const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
+    e.stopPropagation();
+    if (e.button !== 0 || drag.current) return;
+    e.preventDefault();
+    const origin = kind === "container" ? geo.boxes[id] : geo.absPos[id];
+    if (!origin) return;
+    const cid = kind === "node" ? geo.containerOf[id] : undefined;
+    const base = cid ? posRef.current[cid] : undefined;
+    const el = e.currentTarget as Element;
+    const d: Drag = {
+      id, kind, sx: e.clientX, sy: e.clientY, k: view.k, origin: { x: origin.x, y: origin.y },
+      base: base ? { x: base.x, y: base.y } : undefined, last: null, pointerId: e.pointerId, el,
+    };
+    drag.current = d;
+    // Capture on the element that got pointerdown (keeps delivery when the pointer outruns the box or leaves the
+    // window); listeners on window so neither React re-renders nor hit-testing can drop a move or the up.
+    try { el.setPointerCapture?.(e.pointerId); } catch { /* unsupported */ }
+    const onMove = (ev: PointerEvent) => {
+      if (drag.current !== d || ev.pointerId !== d.pointerId) return;
+      if (!d.last && ev.clientX === d.sx && ev.clientY === d.sy) return;
+      d.last = dragTarget(d, ev.clientX, ev.clientY);
+      moved.current.add(d.id);
+      const p = d.last;
+      setPos((prev) => ({ ...prev, [d.id]: p }));
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== d.pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (drag.current !== d) return;
+      if (ev.type === "pointerup" && d.last) d.last = dragTarget(d, ev.clientX, ev.clientY);
+      endDrag(d);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    setSelected(id);
   };
 
   const resetLayout = async () => {
+    if (!window.confirm("Reset the Flow layout? All saved node and box positions for this project/env are replaced by the default layout.")) return;
     setResetting(true);
     try {
-      await api.saveFlowPositions(projectId, {}); // {} = clear → auto (FlowPositionStore)
+      // Drop queued drags so they can't re-apply after the reset.
+      if (saveTimer.current) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+      pending.current = {};
+      // {} = reset. The API may return checked-in defaults rather than empty, so we re-fetch /flow
+      // and use whatever positions it returns.
+      await api.saveFlowPositions(projectId, {});
       moved.current = new Set();
       needFit.current = true;
       reload(); // reload → auto layout → fit
@@ -420,7 +474,7 @@ export default function FlowTab() {
         <button type="button" onClick={() => zoomAt(1.2)} title="Zoom in">+</button>
         <span className="muted zoom-pct">{Math.round(view.k * 100)}%</span>
         {updatedAt && <span className="muted">counts {updatedAt.toLocaleTimeString()}</span>}
-        <button type="button" onClick={resetLayout} disabled={resetting} title="PUT {} clears stored positions → auto layout">
+        <button type="button" onClick={resetLayout} disabled={resetting} title="Asks first; PUT {} resets stored positions to the default layout">
           {resetting ? "Resetting…" : "Reset layout"}
         </button>
         <span className="spacer" />
@@ -450,9 +504,6 @@ export default function FlowTab() {
             ref={svgRef}
             className="flow"
             onPointerDown={onBgPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerLeave={onPointerUp}
           >
             <defs>
               <marker id="arr" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -468,19 +519,19 @@ export default function FlowTab() {
             <rect className="flow-bg" width="100%" height="100%" fill="url(#dots)" />
             <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
             {graph.containers.map(renderContainer)}
-            {visibleEdges.map((e) => {
+            {drawnEdges.map((e) => {
               const a = geo.absPos[e.from],
                 b = geo.absPos[e.to];
               if (!a || !b) return null;
               const d = edgePath(a, b);
               const back = layers[e.to] !== undefined && layers[e.to] <= layers[e.from];
               const cls = `edge${back ? " back" : ""} ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
+              // Exactly one path per from→to and exactly one marker on it (markerEnd = the target node). No
+              // markerStart, no hit-area twin: a second path would get its own arrowhead and read as double-headed.
               return (
-                <g key={e.id}>
-                  <path d={d} className={cls} markerEnd={back ? "url(#arrBack)" : "url(#arr)"}>
-                    <title>{edgeTooltip(e)}</title>
-                  </path>
-                </g>
+                <path key={e.id} d={d} className={cls} markerEnd={back ? "url(#arrBack)" : "url(#arr)"}>
+                  <title>{edgeTooltip(e)}</title>
+                </path>
               );
             })}
             {graph.nodes.map(renderNode)}

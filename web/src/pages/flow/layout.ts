@@ -171,6 +171,46 @@ export function deriveGeometry(g: V2Graph, pos: PosMap): Geometry {
   return { absPos, boxes, topRects, containerOf };
 }
 
+/**
+ * Positions for a (re)fetched graph (pure; no persistence here, ever):
+ *  - stored positions from the wire (`containers[].position`, `nodes[].position`) are PINNED: used verbatim,
+ *    never nudged, never fitted away;
+ *  - ids in `moved` keep their previous local position (the user dragged them this session);
+ *  - only auto-laid items are de-overlapped, and they are nudged AWAY from pinned/moved ones.
+ * Callers must not persist anything from this result: nudged defaults would otherwise overwrite stored keys.
+ */
+export function settleLayout(g: V2Graph, edges: FlowEdge[], prev: PosMap, moved: Set<string>): { pos: PosMap; geo: Geometry; pinned: Set<string> } {
+  const { pos: auto, pinned } = layoutGraph(g, edges);
+  const next: PosMap = { ...auto };
+  moved.forEach((id) => {
+    if (prev[id] && next[id]) next[id] = prev[id];
+  });
+  const keep = (id: string) => pinned.has(id) || moved.has(id);
+  const p = g.layoutHints.containerPadding;
+  // Inner nodes vs their siblings (relative frame, clamped to the box).
+  for (const c of g.containers) {
+    const ms = g.nodes.filter((n) => n.containerId === c.id);
+    for (const n of ms) {
+      if (!next[n.id] || keep(n.id)) continue;
+      const others = ms.filter((o) => o.id !== n.id && next[o.id]).map((o) => nodeRect(o.id, next[o.id]));
+      next[n.id] = nudgeOffOverlaps(nodeRect(n.id, next[n.id]), others, 12, innerMin(p));
+    }
+  }
+  // Top level: containers as units vs standalone nodes. Pinned/moved units are blockers, never targets.
+  let geo = deriveGeometry(g, next);
+  for (const r0 of [...geo.topRects]) {
+    if (keep(r0.id)) continue;
+    const r = geo.topRects.find((x) => x.id === r0.id);
+    if (!r) continue;
+    const np = nudgeOffOverlaps(r, geo.topRects.filter((o) => o.id !== r.id));
+    if (np.x !== r.x || np.y !== r.y) {
+      next[r.id] = np;
+      geo = deriveGeometry(g, next);
+    }
+  }
+  return { pos: next, geo, pinned };
+}
+
 /** Nearest non-overlapping spot for `target` (gap px) among `others`; `min` clamps the result (inner nodes). */
 export function nudgeOffOverlaps(target: Rect, others: Rect[], gap = 12, min?: XY): XY {
   const ok = (x: number, y: number) => !min || (x >= min.x && y >= min.y);
@@ -210,20 +250,29 @@ export function contentBounds(rects: Rect[]) {
 }
 
 type Side = "top" | "bottom" | "left" | "right";
-/** Anchor on the side of node `a` facing node `b` (centre-to-centre direction). Nodes only, never boxes. */
-export function anchor(a: XY, b: XY): { x: number; y: number; nx: number; ny: number } {
+/**
+ * Anchor on the side of node `a` facing node `b` (centre-to-centre direction). Nodes only, never boxes.
+ * `shift` slides the point along that side (clockwise-positive) so an edge tail and an edge head never share one
+ * point: a→b and b→a become two distinct parallel curves instead of one "double-headed" line, and an in-edge
+ * arriving where an out-edge leaves no longer merges with it.
+ */
+export function anchor(a: XY, b: XY, shift = 0): { x: number; y: number; nx: number; ny: number } {
   const dx = b.x + W / 2 - (a.x + W / 2), dy = b.y + H / 2 - (a.y + H / 2);
   const side: Side = Math.abs(dx) / W > Math.abs(dy) / H ? (dx > 0 ? "right" : "left") : dy > 0 ? "bottom" : "top";
   switch (side) {
-    case "right": return { x: a.x + W, y: a.y + H / 2, nx: 1, ny: 0 };
-    case "left": return { x: a.x, y: a.y + H / 2, nx: -1, ny: 0 };
-    case "bottom": return { x: a.x + W / 2, y: a.y + H, nx: 0, ny: 1 };
-    default: return { x: a.x + W / 2, y: a.y, nx: 0, ny: -1 };
+    case "right": return { x: a.x + W, y: a.y + H / 2 + shift, nx: 1, ny: 0 };
+    case "left": return { x: a.x, y: a.y + H / 2 - shift, nx: -1, ny: 0 };
+    case "bottom": return { x: a.x + W / 2 - shift, y: a.y + H, nx: 0, ny: 1 };
+    default: return { x: a.x + W / 2 + shift, y: a.y, nx: 0, ny: -1 };
   }
 }
 
+/** Tail/head separation along a node side (graph px). */
+export const ANCHOR_SHIFT = 7;
+
+/** One cubic from the tail side of `a` to the head side of `b`; the arrowhead belongs at the END only. */
 export function edgePath(a: XY, b: XY): string {
-  const s = anchor(a, b), t = anchor(b, a);
+  const s = anchor(a, b, ANCHOR_SHIFT), t = anchor(b, a, -ANCHOR_SHIFT);
   const dist = Math.hypot(t.x - s.x, t.y - s.y);
   const c = Math.max(24, Math.min(90, dist * 0.4));
   return `M${s.x},${s.y} C${s.x + s.nx * c},${s.y + s.ny * c} ${t.x + t.nx * c},${t.y + t.ny * c} ${t.x},${t.y}`;

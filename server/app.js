@@ -83,7 +83,7 @@ app.get("/auth/login", async (req, res, next) => {
     const code_verifier = generators.codeVerifier();
     const state = generators.state();
     const nonce = generators.nonce();
-    req.session.oidc = { code_verifier, state, nonce };
+    req.session.oidc = { code_verifier, state, nonce, returnTo: req.session.returnTo };
     const url = client.authorizationUrl({
       scope: "openid profile email offline_access",
       code_challenge: generators.codeChallenge(code_verifier),
@@ -110,9 +110,10 @@ app.get("/auth/callback", async (req, res, next) => {
     if (ALLOWLIST_MISSING) { log.error("[config] login rejected: ALLOWED_EMAILS empty"); return page(res, 403, "Not allowed (allowlist not configured)."); }
     if (!ALLOWED.includes(email)) return page(res, 403, "Not allowed.");
     // Replace the whole session (no fixation: new signed cookie, login nonce dropped).
+    const rt = typeof oidc.returnTo === "string" && /^\/(?![\/\\])/.test(oidc.returnTo) ? oidc.returnTo : "/";
     req.session = { user: { email, name: c.name, oid: c.oid, tid: c.tid, iat: Date.now() } };
     wakeApi();
-    res.redirect("/");
+    res.redirect(rt);
   } catch (e) { log.error("[auth] callback failed:", e.message); page(res, 401, 'Login failed. <a href="/auth/login">Try again</a>.'); }
 });
 
@@ -135,6 +136,8 @@ app.use((req, res, next) => {
     return req.path.startsWith("/api") ? res.status(403).json({ error: { code: "FORBIDDEN", message: "Not allowed", retryable: false } }) : page(res, 403, "Not allowed.");
   if (req.session.user) return next();
   if (req.path.startsWith("/api")) return res.status(401).json({ error: "UNAUTHENTICATED" });
+  // Keep the deep link across login (same-origin relative path only).
+  if (req.method === "GET" && req.path !== "/" && !req.path.startsWith("/auth")) req.session.returnTo = req.originalUrl;
   res.redirect(302, "/auth/login");
 });
 
