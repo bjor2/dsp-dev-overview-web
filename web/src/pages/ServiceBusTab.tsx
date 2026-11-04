@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoDlq, demoEntities } from "../mocks/demo";
-import { Count, Empty, ErrorBanner, fmtOslo } from "../components/common";
+import { Empty, EntityCount, ErrorBanner, fmtOslo } from "../components/common";
 
 // Layout per COMPONENTS.md: EntityTable (queues + topic + subscriptions, ADDENDUM §1) | detail pane (Peek / DLQ).
 export default function ServiceBusTab() {
@@ -21,9 +21,12 @@ export default function ServiceBusTab() {
           <table className="grid">
             <thead><tr><th>Entity</th><th>Kind</th><th>Active</th><th>DLQ</th><th>Owner</th></tr></thead>
             <tbody>{data.map((e) => (
-              <tr key={e.entityId} className={`clickable ${sel === e.entityId ? "sel" : ""}`} onClick={() => setSel(e.entityId)}>
-                <td style={{ paddingLeft: e.parentEntityId ? 24 : undefined }}>{e.label}</td><td>{e.kind}</td>
-                <td><Count v={e.activeCount} /></td><td><Count v={e.deadLetterCount} hot={e.dlqHot} /></td><td>{e.owner}</td>
+              <tr key={e.entityId} className={`clickable ${sel === e.entityId ? "sel" : ""} ${e.state === "missing" ? "missing" : ""}`} onClick={() => setSel(e.entityId)}>
+                <td style={{ paddingLeft: e.parentEntityId ? 24 : undefined }}>
+                  {e.label}
+                  {e.state === "missing" && <span className="state-missing" title="Not provisioned on this namespace (ADDENDA-009)">not on namespace</span>}
+                </td><td>{e.kind}</td>
+                <td><EntityCount v={e.activeCount} state={e.state} /></td><td><EntityCount v={e.deadLetterCount} hot={e.dlqHot} state={e.state} /></td><td>{e.owner}</td>
               </tr>))}
             </tbody>
           </table>

@@ -4,6 +4,10 @@ import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoProjects } from "../mocks/demo";
 import { ErrorBanner, HealthDot, fmtOslo } from "../components/common";
+import type { ProjectSummary } from "../api/types";
+
+/** Shared with the tabs via <Outlet context>: the summary already fetched here (ADDENDA-009 notice lives on it). */
+export type ProjectOutletContext = { project: ProjectSummary | undefined };
 
 const TABS = [["flow", "Flow"], ["service-bus", "Service Bus"], ["logs", "Logs"], ["console", "Console"]] as const;
 
@@ -27,7 +31,7 @@ export default function ProjectDetailLayout() {
       </div>
       {error && <ErrorBanner error={error} onRetry={reload} />}
       <nav className="tabs">{TABS.map(([to, label]) => <NavLink key={to} to={to}>{label}</NavLink>)}</nav>
-      <Outlet />
+      <Outlet context={{ project: p } satisfies ProjectOutletContext} />
     </section>
   );
 }

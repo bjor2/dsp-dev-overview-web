@@ -81,3 +81,27 @@ svg.flow:active { cursor: grabbing; }
 /* Toolbar: layout source indicator + inline Reset confirmation (no native confirm()) */
 .layout-stat { white-space: nowrap; }
 .inline-confirm { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid #d64545; border-radius: 5px; background: #fff2f2; font-size: 13px; white-space: nowrap; }
+
+/* ADDENDA-009 (price.dev): project notice, blob container, trigger badges, missing (not provisioned) entities */
+.notice { font-size: 12px; margin-top: 3px; padding: 2px 8px; border-radius: 4px; display: inline-block; max-width: 520px; }
+.notice.warn { background: #fef3c7; border: 1px solid #d97706; color: #92400e; }
+.notice.info { background: #eef2f7; border: 1px solid #cbd5e1; color: #334155; }
+.flow-notice { margin: 0 0 6px; }
+.state-missing { display: inline-block; margin-left: 8px; font-size: 10.5px; color: #64748b; border: 1px dashed #94a3b8; border-radius: 9px; padding: 0 6px; line-height: 15px; white-space: nowrap; }
+tr.missing td { color: #64748b; }
+.count.state-word { font-style: italic; font-size: 12px; color: #94a3b8; }
+.node.blobContainer rect { fill: #e0f2f1; stroke: #0f766e; }
+.node.missing rect { stroke-dasharray: 4 3; }
+.node.missing .t1 { fill: #64748b; }
+.node.missing .t2 { fill: #94a3b8; }
+.edge.from-blobContainer { stroke: #0f766e; }
+.trigger-badge rect { fill: #e0f2f1; stroke: #0f766e; stroke-width: 1; }
+.trigger-badge text { fill: #134e4a; font-size: 9.5px; font-weight: 600; pointer-events: none; }
+.trigger-badge.timer rect { fill: #eef2ff; stroke: #4f46e5; }
+.trigger-badge.timer text { fill: #3730a3; }
+.trigger-badge.timer .clock { fill: none; stroke: #3730a3; stroke-width: 1.3; stroke-linecap: round; }
+.legend-pill.timer { background: #eef2ff; border-color: #4f46e5; color: #3730a3; }
+.legend-pill.blob { background: #e0f2f1; border-color: #0f766e; color: #134e4a; }
+.legend-pill .clock { fill: none; stroke: #3730a3; stroke-width: 1.3; stroke-linecap: round; vertical-align: -2px; }
+.side-panel .trigger-list { margin: 2px 0 6px; padding-left: 16px; font-size: 12px; }
+.no-samples { white-space: nowrap; }

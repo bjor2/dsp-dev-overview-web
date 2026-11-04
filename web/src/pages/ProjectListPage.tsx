@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoProjects } from "../mocks/demo";
-import { Count, Empty, ErrorBanner, HealthDot, fmtOslo } from "../components/common";
+import { Count, Empty, ErrorBanner, HealthDot, fmtOslo, noticeText, noticeTitle } from "../components/common";
 
 export default function ProjectListPage() {
   const nav = useNavigate();
@@ -24,7 +24,14 @@ export default function ProjectListPage() {
             {data.map((p) => (
               <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${encodeURIComponent(p.id)}/flow`)}>
                 <td><HealthDot health={p.health} /></td>
-                <td><strong>{p.project}</strong><div className="muted">{p.id}</div></td>
+                <td>
+                  <strong>{p.project}</strong><div className="muted">{p.id}</div>
+                  {p.notice && (
+                    <div className={`notice ${p.notice.severity === "warn" ? "warn" : "info"}`} role="note" title={noticeTitle(p.notice)} data-code={p.notice.code}>
+                      {noticeText(p.notice)}
+                    </div>
+                  )}
+                </td>
                 <td><span className="badge env">{p.env}</span></td>
                 <td>{p.healthDetail.appsUp}/{p.healthDetail.appsTotal}</td>
                 <td>{p.healthDetail.sbReachable ? "✓" : "✗"}</td>

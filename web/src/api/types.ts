@@ -6,10 +6,14 @@ export interface ProjectSummary {
   appCount: number; queueCount: number; dlqTotal: number | null; registrationGeneratedAt: string;
   /** Slice 7 — open TraceIt externally when present. */
   traceItUrl?: string;
+  /** ADDENDA-009: hint only when there is something to say. severity is info|warn, never error (render amber/neutral, not red). */
+  notice?: ProjectNotice;
 }
+export interface ProjectNotice { code: string; severity: "info" | "warn"; message: string; missing?: number; checked?: number }
 export type Scope = "local" | "cloud" | "both";
 /** v2 (ADDENDA-008): `handler` replaces `app`; `app` is kept so v1 payloads/demo data still type-check. */
-export type NodeKind = "handler" | "queue" | "topic" | "subscription" | "external" | "app";
+/** ADDENDA-009: `blobContainer` = standalone storage source (no `sb`, not peekable). */
+export type NodeKind = "handler" | "queue" | "topic" | "subscription" | "blobContainer" | "external" | "app";
 export interface FlowAppInfo { appKind?: string; port?: number; cloudRoleName?: string; attached?: boolean }
 /** v2: apps are containers; resource containers carry `app`. `position` is ABSOLUTE and only present when stored. */
 export interface FlowContainer {
@@ -25,19 +29,27 @@ export interface FlowContainer {
 }
 /** OQ-1: self-requeue is a badge on the handler, not an edge. */
 export interface SelfRequeue { entityId: string; messages?: string[]; sources?: string[] }
+/** ADDENDA-009: one entry per function. timer → `schedule` (or `setting` when the cron is an app setting); blob → `path`. */
+export interface HandlerTrigger {
+  kind: "servicebus" | "http" | "timer" | "blob";
+  function?: string; entityId?: string; schedule?: string; setting?: string; path?: string;
+}
 export interface HandlerInfo {
   /** §11: singular; omitted for `*.http`. `functions[]` (§6 draft) is accepted as a fallback. */
   function?: string;
   functions?: string[];
   triggerEntityIds?: string[];
   selfRequeue: SelfRequeue[];
+  /** ADDENDA-009: every handler; timer-only handlers have no inbound edge and empty triggerEntityIds. */
+  triggers?: HandlerTrigger[];
 }
 export interface FlowNode {
   id: string; kind: NodeKind; label: string; scope: Scope;
   /** v1 only (`kind: "app"`). v2 puts apps in `FlowGraph.containers[].app`. */
   app?: { appKind: "web" | "func" | "func-ingress"; port?: number; cloudRoleName?: string; attached: boolean };
   /** dlqHot = deadLetterCount !== null && deadLetterCount > 0 only (ADDENDA-003). Never derive from near-maxDeliveryCount. */
-  sb?: { activeCount: number | null; deadLetterCount: number | null; dlqHot: boolean; owner: "project" | "shared"; maxDeliveryCount?: number | null };
+  /** ADDENDA-009: `state: "missing"` = not provisioned on the namespace (null counts, never dlqHot). Absent for normal entities. */
+  sb?: { activeCount: number | null; deadLetterCount: number | null; dlqHot: boolean; owner: "project" | "shared"; maxDeliveryCount?: number | null; state?: "missing" };
   /** Handlers only. Absent when the container is hidden in the current scope. */
   containerId?: string;
   handler?: HandlerInfo;
@@ -82,6 +94,8 @@ export interface SampleMessageCatalog {
   projectId: string; source: string; mirroredAt: string;
   sampleProjects: { index: 1 | 2 | 3; customerId: string; name: string; orderNumber: string; active: boolean }[];
   presets: SamplePreset[]; messages: SampleMessage[];
+  /** ADDENDA-009: false = no sample kit for this project (empty catalog, send/purge return 404 SAMPLES_NOT_AVAILABLE). */
+  available?: boolean; reason?: string;
 }
 /** ADDENDUM §3: bodyOverride = body only; applicationPropertiesOverride merges over kit props. "Reset to kit" clears both. */
 export interface SampleSendRequest {
@@ -98,6 +112,8 @@ export interface EntityStatus {
   entityId: string; kind: SbEntityKind; label: string;
   activeCount: number | null; deadLetterCount: number | null; dlqHot: boolean;
   owner: "project" | "shared"; parentEntityId?: string;
+  /** ADDENDA-009: not provisioned on the namespace. */
+  state?: "missing";
 }
 export interface PeekedMessage {
   sequenceNumber: number; messageId: string; subject?: string; contentType?: string; correlationId?: string;

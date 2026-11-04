@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoFlow } from "../mocks/demo";
-import { Count, Empty, ErrorBanner } from "../components/common";
+import { Count, Empty, ErrorBanner, noticeText, noticeTitle } from "../components/common";
 import SampleMessagePicker from "../components/SampleMessagePicker";
 import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
 import { clearLocalPositions, loadLocalPositions, mergeLocalPositions, storageKey } from "./flow/localPositions";
-import type { FlowEdge } from "../api/types";
+import type { FlowEdge, HandlerTrigger } from "../api/types";
+import type { ProjectOutletContext } from "./ProjectDetailLayout";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
   EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, settleLayout,
@@ -25,8 +26,13 @@ const PALETTE = {
     queue: { fill: "#e6f6ea", stroke: "#5aa86c", dash: undefined, label: "Queue" },
     topic: { fill: "#f1e9ff", stroke: "#9a7bd8", dash: undefined, label: "Topic" },
     subscription: { fill: "#f7f2ff", stroke: "#b39ddb", dash: undefined, label: "Subscription" },
+    /** ADDENDA-009: standalone storage source; no sb, no counts, not peekable. */
+    blobContainer: { fill: "#e0f2f1", stroke: "#0f766e", dash: undefined, label: "Blob container (storage)" },
   } as Record<string, { fill: string; stroke: string; dash?: string; label: string }>,
   fallback: { fill: "#ffffff", stroke: "#94a3b8", dash: undefined, label: "Other" },
+  /** ADDENDA-009: sb.state === "missing" → muted + dashed, never hot. */
+  missing: { fill: "#f8fafc", stroke: "#94a3b8", dash: "4 3" },
+  storage: "#0f766e",
   container: { fill: "#5b8def14", stroke: "#5b8def", dash: "6 3" },
   hot: "#dc2626",
   sel: "#2563eb",
@@ -41,6 +47,23 @@ const PALETTE = {
 /** Handler nodes render like the old app nodes (same box, blue tint). */
 const kindStyle = (k: string) => PALETTE.kind[k === "handler" ? "app" : k] ?? PALETTE.fallback;
 const LEGEND_KEY = "flow.legend.collapsed";
+
+/** ADDENDA-009 helpers: trigger kinds and the "not provisioned" state. */
+const triggersOf = (n: V2Node, kind: HandlerTrigger["kind"]): HandlerTrigger[] =>
+  (Array.isArray(n.handler?.triggers) ? n.handler!.triggers! : []).filter((t) => t && t.kind === kind);
+const isMissing = (n: V2Node) => n.sb?.state === "missing";
+const timerTooltip = (ts: HandlerTrigger[]) =>
+  ts.map((t) => `⏰ ${t.function ?? "timer"}: ${t.schedule ?? t.setting ?? "(schedule unknown)"}${t.schedule && t.setting ? " (setting " + t.setting + ")" : ""}`).join("\n");
+const blobTooltip = (ts: HandlerTrigger[]) =>
+  ts.map((t) => `blob ${t.function ?? "trigger"}: ${t.path ?? t.entityId ?? ""}`).join("\n");
+
+/** Small SVG clock (circle + two hands); used in the timer badge and the legend. */
+const ClockIcon = ({ cx, cy, r = 4.5 }: { cx: number; cy: number; r?: number }) => (
+  <g className="clock">
+    <circle cx={cx} cy={cy} r={r} />
+    <path d={`M${cx},${cy - r * 0.6}V${cy}H${cx + r * 0.5}`} />
+  </g>
+);
 
 function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(LEGEND_KEY) === "1");
@@ -64,11 +87,17 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
             ))}
             <div>{box(PALETTE.container.fill, PALETTE.container.stroke, PALETTE.container.dash)} Container (app)</div>
             <div><span className="legend-pill">⟲ requeue</span> self-requeue (no edge)</div>
+            <div>{box(PALETTE.missing.fill, PALETTE.missing.stroke, PALETTE.missing.dash)} not on namespace (missing)</div>
             <div>{box("#fff", PALETTE.hot, undefined, 2.5)} DLQ hot</div>
             <div>{box("#fff", PALETTE.sel, undefined, 2.5)} Selected</div>
           </div>
           <div className="legend-col">
             <div>{line(PALETTE.edge)} trigger / publish</div>
+            <div>{line(PALETTE.storage)} blob trigger (from storage)</div>
+            <div>
+              <span className="legend-pill timer"><svg width="11" height="11" viewBox="0 0 11 11"><ClockIcon cx={5.5} cy={5.5} /></svg> timer</span>
+              <span className="legend-pill blob">▤ blob</span> trigger badges
+            </div>
             <div>{line(PALETTE.inject)} inject</div>
             <div>{line(PALETTE.edge, "2 4")} inferred</div>
             <div>{line(PALETTE.edge, "8 5")} cloud</div>
@@ -128,6 +157,12 @@ export default function FlowTab() {
   const scope = showCloud ? "all" : "local";
   const { data, error, loading, reload } = useApi(() => api.flow(projectId, scope), demoFlow, [projectId, scope]);
   const { counts, updatedAt, refresh } = useFlowCounts(projectId);
+  /** ADDENDA-009: the project notice comes from the summary ProjectDetailLayout already fetched (no extra endpoint). */
+  const outlet = useOutletContext<ProjectOutletContext | undefined>();
+  const notice = outlet?.project?.notice;
+  /** ADDENDA-009 §3: `available === false` → no "Inject sample…" (send/purge would 404 SAMPLES_NOT_AVAILABLE). */
+  const samples = useApi(() => api.samples(projectId), undefined, [projectId]);
+  const samplesAvailable = samples.data ? samples.data.available !== false : null; // null = unknown (loading / error) → keep the button
   /** Local positions are the source of truth; nodes the user moved are never overwritten by server data. */
   const moved = useRef<Set<string>>(new Set());
   const needFit = useRef(true); // first load, Reset, project change only
@@ -376,6 +411,8 @@ export default function FlowTab() {
   }, [graph, localCount]);
 
   const layers = useMemo(() => (graph ? computeLayers(graph.nodes.map((n) => n.id), visibleEdges) : {}), [graph, visibleEdges]);
+  /** Node kind by id, for styling an edge by its SOURCE node (blob trigger = normal `trigger` edge from a blobContainer). */
+  const kindOf = useMemo(() => new Map((graph?.nodes ?? []).map((n) => [n.id, n.kind as string])), [graph]);
   const sel = graph?.nodes.find((n) => n.id === selected);
   const selContainer = graph?.containers.find((c) => c.id === selected);
   const containerLabel = (id?: string) => graph?.containers.find((c) => c.id === id)?.label ?? id;
@@ -384,6 +421,8 @@ export default function FlowTab() {
     if (n.app)
       return n.app.attached ? <tspan fill={PALETTE.attached}>● attached</tspan> : <tspan fill={PALETTE.detached}>○ not attached</tspan>;
     if (n.kind === "handler") return handlerFunction(n) ?? (n.handler?.triggerEntityIds?.length ? "trigger: " + n.handler.triggerEntityIds.join(", ") : "handler");
+    if (n.kind === "blobContainer") return "storage · blob container";
+    if (isMissing(n)) return c ? `a — · DLQ — · not on namespace` : "not on namespace";
     return c ? countsLabel(c) : n.kind;
   };
 
@@ -418,31 +457,39 @@ export default function FlowTab() {
     const p = geo.absPos[n.id];
     if (!p) return null;
     const c = n.kind === "queue" || n.kind === "subscription" ? nodeCounts(n, counts) : null;
-    const hot = c ? c.dlqHot : !!n.sb?.dlqHot;
+    const missing = isMissing(n);
+    const hot = !missing && (c ? c.dlqHot : !!n.sb?.dlqHot); // a missing entity is never DLQ-hot (ADDENDA-009)
     const isSel = selected === n.id;
     const rq = selfRequeue(n);
+    const timers = n.kind === "handler" ? triggersOf(n, "timer") : [];
+    const blobs = n.kind === "handler" ? triggersOf(n, "blob") : [];
+    const style = missing ? PALETTE.missing : kindStyle(n.kind);
     return (
       <g
         key={n.id}
         transform={`translate(${p.x},${p.y})`}
-        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""}`}
+        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${missing ? "missing" : ""}`}
         onPointerDown={(e) => beginDrag(e, n.id, "node")}
         style={{ cursor: "grab" }}
       >
         <title>
-          {n.sb?.maxDeliveryCount != null
-            ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
-            : `${n.label}${n.containerId ? " · in " + containerLabel(n.containerId) : ""} · drag to move`}
+          {n.kind === "blobContainer"
+            ? `${n.label} · storage blob container (not a Service Bus entity) · drag to move`
+            : missing
+              ? `${n.label} · not provisioned on this namespace${n.sb?.maxDeliveryCount != null ? " · MaxDeliveryCount " + n.sb.maxDeliveryCount : ""} · drag to move`
+              : n.sb?.maxDeliveryCount != null
+                ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
+                : `${n.label}${n.containerId ? " · in " + containerLabel(n.containerId) : ""} · drag to move`}
         </title>
         <rect
           width={W}
           height={H}
           rx={n.kind === "app" || n.kind === "handler" ? 8 : 3}
           style={{
-            fill: kindStyle(n.kind).fill,
-            stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : kindStyle(n.kind).stroke,
+            fill: style.fill,
+            stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : style.stroke,
             strokeWidth: isSel || hot ? 2.5 : 1.2,
-            strokeDasharray: kindStyle(n.kind).dash,
+            strokeDasharray: style.dash,
           }}
         />
         <text x={8} y={17} className="t1">
@@ -456,6 +503,22 @@ export default function FlowTab() {
             <title>{requeueTooltip(n)}</title>
             <rect width={62} height={17} rx={8.5} />
             <text x={31} y={12} textAnchor="middle">⟲ requeue</text>
+          </g>
+        )}
+        {/* ADDENDA-009 trigger badges sit top-left (requeue stays top-right, so they never collide). */}
+        {timers.length > 0 && (
+          <g className="trigger-badge timer" transform="translate(6,-9)" data-count={timers.length}>
+            <title>{timerTooltip(timers)}</title>
+            <rect width={timers.length > 1 ? 34 : 22} height={17} rx={8.5} />
+            <ClockIcon cx={11} cy={8.5} />
+            {timers.length > 1 && <text x={28} y={12.5} textAnchor="middle">{timers.length}</text>}
+          </g>
+        )}
+        {blobs.length > 0 && (
+          <g className="trigger-badge blob" transform={`translate(${timers.length ? (timers.length > 1 ? 44 : 32) : 6},-9)`}>
+            <title>{blobTooltip(blobs)}</title>
+            <rect width={40} height={17} rx={8.5} />
+            <text x={20} y={12.5} textAnchor="middle">▤ blob</text>
           </g>
         )}
       </g>
@@ -495,10 +558,19 @@ export default function FlowTab() {
         )}
         <span className="spacer" />
 
-        <button className="primary" onClick={() => setPickerOpen(true)}>
-          Inject sample…
-        </button>
+        {samplesAvailable === false ? (
+          <span className="muted no-samples" title={samples.data?.reason}>No sample kit for this project</span>
+        ) : (
+          <button className="primary" onClick={() => setPickerOpen(true)}>
+            Inject sample…
+          </button>
+        )}
       </div>
+      {notice && (
+        <div className={`notice flow-notice ${notice.severity === "warn" ? "warn" : "info"}`} role="note" title={noticeTitle(notice)} data-code={notice.code}>
+          {noticeText(notice)}
+        </div>
+      )}
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {graph?.warnings && graph.warnings.length > 0 && (
         <div className="warn-banner" role="status">
@@ -528,6 +600,9 @@ export default function FlowTab() {
               <marker id="arrBack" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
                 <path d="M0,0L10,5L0,10z" fill={PALETTE.back} />
               </marker>
+              <marker id="arrStorage" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                <path d="M0,0L10,5L0,10z" fill={PALETTE.storage} />
+              </marker>
               <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
                 <circle cx="1" cy="1" r="1" fill="#d7dde6" />
               </pattern>
@@ -541,11 +616,12 @@ export default function FlowTab() {
               if (!a || !b) return null;
               const d = edgePath(a, b);
               const back = layers[e.to] !== undefined && layers[e.to] <= layers[e.from];
-              const cls = `edge${back ? " back" : ""} ${e.kind} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
+              const fromBlob = kindOf.get(e.from) === "blobContainer";
+              const cls = `edge${back ? " back" : ""} ${e.kind} ${fromBlob ? "from-blobContainer" : ""} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
               // Exactly one path per from→to and exactly one marker on it (markerEnd = the target node). No
               // markerStart, no hit-area twin: a second path would get its own arrowhead and read as double-headed.
               return (
-                <path key={e.id} d={d} className={cls} markerEnd={back ? "url(#arrBack)" : "url(#arr)"}>
+                <path key={e.id} d={d} className={cls} markerEnd={back ? "url(#arrBack)" : fromBlob ? "url(#arrStorage)" : "url(#arr)"}>
                   <title>{edgeTooltip(e)}</title>
                 </path>
               );
@@ -616,6 +692,31 @@ export default function FlowTab() {
                     )}
                   </p>
                 )}
+                {(triggersOf(sel, "timer").length > 0 || triggersOf(sel, "blob").length > 0) && (
+                  <>
+                    <h5>Triggers</h5>
+                    <ul className="trigger-list">
+                      {triggersOf(sel, "timer").map((t, i) => (
+                        <li key={"t" + i} title={timerTooltip([t])}>
+                          <span className="legend-pill timer"><svg width="11" height="11" viewBox="0 0 11 11"><ClockIcon cx={5.5} cy={5.5} /></svg> timer</span>
+                          {t.function && <code>{t.function}</code>} <span className="muted">{t.schedule ?? t.setting}{t.schedule && t.setting ? ` · setting ${t.setting}` : ""}</span>
+                        </li>
+                      ))}
+                      {triggersOf(sel, "blob").map((t, i) => (
+                        <li key={"b" + i} title={blobTooltip([t])}>
+                          <span className="legend-pill blob">▤ blob</span>
+                          {t.function && <code>{t.function}</code>} <span className="muted">{t.path ?? t.entityId}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {sel.kind === "blobContainer" && (
+                  <p className="muted">Storage blob container. Not a Service Bus entity: no counts, no DLQ, not peekable.</p>
+                )}
+                {isMissing(sel) && (
+                  <p><span className="state-missing">not on namespace</span> <span className="muted">Not provisioned on this namespace (counts unknown, never DLQ-hot).</span></p>
+                )}
                 {selfRequeue(sel).length > 0 && (
                   <>
                     <h5><span className="legend-pill">⟲ requeue</span> Self-requeue</h5>
@@ -635,8 +736,8 @@ export default function FlowTab() {
                 )}
                 {sel.sb && (
                   <p>
-                    Active <Count v={nodeCounts(sel, counts)?.active ?? sel.sb.activeCount} /> · DLQ{" "}
-                    <Count v={nodeCounts(sel, counts)?.dlq ?? sel.sb.deadLetterCount} hot={nodeCounts(sel, counts)?.dlqHot ?? sel.sb.dlqHot} /> ·{" "}
+                    Active <Count v={isMissing(sel) ? null : nodeCounts(sel, counts)?.active ?? sel.sb.activeCount} /> · DLQ{" "}
+                    <Count v={isMissing(sel) ? null : nodeCounts(sel, counts)?.dlq ?? sel.sb.deadLetterCount} hot={!isMissing(sel) && (nodeCounts(sel, counts)?.dlqHot ?? sel.sb.dlqHot)} /> ·{" "}
                     {sel.sb.owner}
                     {sel.sb.maxDeliveryCount != null && (
                       <>
