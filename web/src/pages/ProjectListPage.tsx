@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoProjects } from "../mocks/demo";
 import AgentPill from "../agent/AgentPill";
+import AppsUpCell from "../agent/AppsUpCell";
 import { Count, Empty, ErrorBanner, HealthDot, fmtOslo, noticeText, noticeTitle } from "../components/common";
 
 export default function ProjectListPage() {
@@ -34,7 +35,7 @@ export default function ProjectListPage() {
                   )}
                 </td>
                 <td><span className="badge env">{p.env}</span></td>
-                <td className="apps-up">{p.healthDetail.appsUp}/{p.healthDetail.appsTotal}</td>
+                <td className="apps-up"><AppsUpCell regId={p.id} appsUp={p.healthDetail.appsUp} appsTotal={p.healthDetail.appsTotal} /></td>
                 <td className="local-agent"><AgentPill regId={p.id} appsTotal={p.healthDetail.appsTotal} /></td>
                 <td>{p.healthDetail.sbReachable ? "✓" : "✗"}</td>
                 <td>{p.healthDetail.aiQueryOk ? "✓" : "✗"}</td>
