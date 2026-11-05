@@ -18,7 +18,7 @@ import type { FlowEdge, HandlerTrigger } from "../api/types";
 import type { ProjectOutletContext } from "./ProjectDetailLayout";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
-  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, settleLayout,
+  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, nodeRect, settleLayout,
 } from "./flow/layout";
 
 const ZMIN = 0.2, ZMAX = 3;
@@ -115,6 +115,7 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
             </div>
             <div><span className="state-unknown">?</span> state unknown (agent)</div>
             <div className="muted">drag node · drag box header moves its nodes · drag canvas pans · wheel zooms</div>
+            <div className="muted">shift+click / shift+drag selects · drag selection moves group · Esc clears</div>
           </div>
         </div>
       )}
@@ -129,18 +130,31 @@ type View = { x: number; y: number; k: number };
  * exactly where the pointer is. `last` is the latest position written to state, in the WIRE frame (containers /
  * standalone absolute, inner nodes relative to their container) — pointer-up reads this, not React state, because
  * the final pointermove is often not rendered yet when pointerup arrives.
+ * A drag moves one item, or the whole multi-selection when the grabbed item is part of it: every item gets the
+ * same client delta applied to its own drag-start origin.
  */
-type Drag = {
+type DragItem = {
   id: string;
-  kind: "node" | "container";
-  sx: number; sy: number; k: number;
+  /** Drag-start position (absolute): the box origin for containers, the absolute node position otherwise. */
   origin: XY;
   /** Container origin (absolute) when dragging an inner node. */
   base?: XY;
-  last: XY | null;
+};
+type Drag = {
+  items: DragItem[];
+  sx: number; sy: number; k: number;
+  /** Latest wire-frame position per dragged id (null until the pointer first moves). */
+  last: PosMap | null;
   pointerId: number;
   el: Element;
 };
+/** Axis-aligned box in graph coordinates without an id (marquee, hit tests). */
+type Box = Omit<Rect, "id">;
+/** A pointerdown→up that moved less than this (px) is a click, not a drag. */
+const CLICK_SLOP = 3;
+const isClick = (sx: number, sy: number, ev: PointerEvent) => Math.hypot(ev.clientX - sx, ev.clientY - sy) < CLICK_SLOP;
+const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 const edgeTooltip = (e: FlowEdge) =>
   `${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]` +
   (e.sources?.length ? "\n" + e.sources.map((s) => "  " + s).join("\n") : "");
@@ -155,6 +169,10 @@ export default function FlowTab() {
   const [showCloud, setShowCloud] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  /** Multi-selection (node + container ids): shift+click toggles, shift+drag marquee adds, a drag moves all of it. */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(EMPTY_SELECTION);
+  /** Live marquee in graph coordinates while shift-dragging on the empty canvas. */
+  const [marquee, setMarquee] = useState<Box | null>(null);
   /** Wire frame (ADDENDA-008 §7): container ids absolute, inner node ids RELATIVE to their container, others absolute. */
   const [pos, setPos] = useState<PosMap>({});
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
@@ -185,7 +203,22 @@ export default function FlowTab() {
   useEffect(() => {
     moved.current = new Set();
     needFit.current = true;
+    setSelection(EMPTY_SELECTION);
   }, [projectId]);
+
+  const clearSelection = useCallback(() => setSelection((s) => (s.size ? EMPTY_SELECTION : s)), []);
+  const toggleSelected = (id: string) =>
+    setSelection((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  // Esc clears the multi-selection.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") clearSelection(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clearSelection]);
 
   const graph = useMemo(() => (data ? normalizeGraph(data) : null), [data]);
   /** localStorage key for this project + env (dsp-flow-pos:v2:{project}:{env}); the ref is for drag-end / unload writes. */
@@ -276,6 +309,11 @@ export default function FlowTab() {
     const { pos: next, geo: g } = settleLayout(graph, visibleEdges, prev, pin);
     posRef.current = next;
     setPos(next);
+    // Drop selected ids the fresh graph no longer has (e.g. cloud nodes after "Show cloud edges" is turned off).
+    setSelection((s) => {
+      const keep = [...s].filter((id) => g.boxes[id] || g.absPos[id]);
+      return keep.length === s.size ? s : new Set(keep);
+    });
     if (needFit.current) {
       needFit.current = false;
       const rects = g.topRects;
@@ -313,28 +351,82 @@ export default function FlowTab() {
     };
   }, [posKey, flushLocal]);
 
-  // Pan: window listeners from pointerdown on the background until pointerup, absolute delta from the start.
-  const onBgPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || drag.current) return;
-    const pn = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
-    pan.current = pn;
-    const onMove = (ev: PointerEvent) => setView((v) => ({ ...v, x: pn.vx + ev.clientX - pn.sx, y: pn.vy + ev.clientY - pn.sy }));
-    const onUp = () => {
-      pan.current = null;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+  /**
+   * Track one pointer on window listeners until it is released: `onMove` for every move, `onEnd` once on
+   * pointerup / pointercancel (other pointers are ignored).
+   */
+  const trackPointer = (pointerId: number, onMove: ((ev: PointerEvent) => void) | null, onEnd: (ev: PointerEvent) => void) => {
+    const move = (ev: PointerEvent) => { if (ev.pointerId === pointerId) onMove?.(ev); };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      onEnd(ev);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
-  /** Latest drag-frame state → wire-frame position for the dragged id (inner nodes clamped inside their box). */
-  const dragTarget = (d: Drag, clientX: number, clientY: number): XY => {
-    const ax = d.origin.x + (clientX - d.sx) / d.k, ay = d.origin.y + (clientY - d.sy) / d.k;
-    return d.base ? clampInner({ x: ax - d.base.x, y: ay - d.base.y }, pad) : { x: ax, y: ay };
+  // Background pointerdown: shift → marquee select; otherwise pan (window listeners until pointerup, absolute delta
+  // from the start). A plain click (no movement) on the empty canvas clears the multi-selection.
+  const onBgPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || drag.current) return;
+    if (e.shiftKey) return beginMarquee(e);
+    const pn = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    pan.current = pn;
+    trackPointer(
+      e.pointerId,
+      (ev) => setView((v) => ({ ...v, x: pn.vx + ev.clientX - pn.sx, y: pn.vy + ev.clientY - pn.sy })),
+      (ev) => {
+        pan.current = null;
+        if (ev.type === "pointerup" && isClick(pn.sx, pn.sy, ev)) clearSelection();
+      },
+    );
   };
+
+  /**
+   * Shift+drag on the empty canvas: a marquee in graph coordinates (view snapshot from the start). On release every
+   * node and container whose bbox intersects it is ADDED to the selection.
+   */
+  const beginMarquee = (e: React.PointerEvent) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    const v = view;
+    const toGraph = (cx: number, cy: number): XY => ({ x: (cx - r.left - v.x) / v.k, y: (cy - r.top - v.y) / v.k });
+    const a = toGraph(e.clientX, e.clientY);
+    const boxTo = (ev: PointerEvent): Box => {
+      const b = toGraph(ev.clientX, ev.clientY);
+      return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+    };
+    trackPointer(
+      e.pointerId,
+      (ev) => setMarquee(boxTo(ev)),
+      (ev) => {
+        setMarquee(null);
+        if (ev.type !== "pointerup") return;
+        const m = boxTo(ev);
+        if (!m.w && !m.h) return; // shift+click on empty canvas: no-op
+        const hits = [
+          ...Object.values(geo.boxes).filter((b) => overlaps(m, b)).map((b) => b.id),
+          ...Object.entries(geo.absPos).filter(([id, p]) => overlaps(m, nodeRect(id, p))).map(([id]) => id),
+        ];
+        if (hits.length) setSelection((s) => new Set([...s, ...hits]));
+      },
+    );
+  };
+
+  /** Latest drag-frame state → wire-frame position for one dragged item (inner nodes clamped inside their box). */
+  const dragTarget = (d: Drag, it: DragItem, clientX: number, clientY: number): XY => {
+    const ax = it.origin.x + (clientX - d.sx) / d.k, ay = it.origin.y + (clientY - d.sy) / d.k;
+    return it.base ? clampInner({ x: ax - it.base.x, y: ay - it.base.y }, pad) : { x: ax, y: ay };
+  };
+  /** Wire-frame positions of every dragged item for one pointer position (same delta for all). */
+  const dragTargets = (d: Drag, clientX: number, clientY: number): PosMap =>
+    Object.fromEntries(d.items.map((it) => [it.id, dragTarget(d, it, clientX, clientY)]));
 
   const endDrag = (d: Drag) => {
     drag.current = null;
@@ -343,31 +435,51 @@ export default function FlowTab() {
     // The drop position is exactly where the user let go: `origin + (client − clientStart) / k`, computed once from
     // the drag-start snapshot (inner nodes only clamped inside their box). No de-overlap nudge here: it used to snap a
     // box that landed on another unit to the far side of that unit (a 150px drag to the right became a 218px drop).
-    // Read the drag's own last position, not React state: the last pointermove may not be rendered yet.
+    // Read the drag's own last positions, not React state: the last pointermove may not be rendered yet.
     const final = d.last;
-    const cur: PosMap = { ...posRef.current, [d.id]: final };
+    const cur: PosMap = { ...posRef.current, ...final };
     posRef.current = cur;
     setPos(cur);
-    // Exact graph id ("container:…" for boxes, node id otherwise) merged into this browser's localStorage map.
-    mergeLocalPositions(posKeyRef.current, { [d.id]: final });
+    // Exact graph ids ("container:…" for boxes, node id otherwise) merged into this browser's localStorage map.
+    mergeLocalPositions(posKeyRef.current, final);
     setLocalCount(Object.keys(loadLocalPositions(posKeyRef.current, graph)).length);
   };
 
-  const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
-    e.stopPropagation();
-    if (e.button !== 0 || drag.current || resetting) return;
-    e.preventDefault();
-    // Box origin == the container's stored position (deriveGeometry puts the box at pos[c.id]; header and padding
-    // are drawn INSIDE the box), so the drag target is the wire position with no header/padding offset added.
-    const origin = kind === "container" ? geo.boxes[id] : geo.absPos[id];
-    if (!origin) return;
-    const cid = kind === "node" ? geo.containerOf[id] : undefined;
+  /**
+   * One item to drag. Box origin == the container's stored position (deriveGeometry puts the box at pos[c.id];
+   * header and padding are drawn INSIDE the box), so the drag target is the wire position with no header/padding
+   * offset added. Inner nodes also carry their container's origin, to convert back to the relative wire frame.
+   */
+  const dragItem = (id: string): DragItem | null => {
+    const origin = geo.boxes[id] ?? geo.absPos[id];
+    if (!origin) return null;
+    const cid = geo.containerOf[id];
     const base = cid ? posRef.current[cid] : undefined;
+    return { id, origin: { x: origin.x, y: origin.y }, base: base ? { x: base.x, y: base.y } : undefined };
+  };
+
+  const beginDrag = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    if (e.button !== 0 || drag.current) return;
+    e.preventDefault();
+    // Shift+click toggles the item in/out of the multi-selection; a shift+drag on an item moves nothing.
+    if (e.shiftKey) {
+      const sx = e.clientX, sy = e.clientY;
+      trackPointer(e.pointerId, null, (ev) => { if (ev.type === "pointerup" && isClick(sx, sy, ev)) toggleSelected(id); });
+      return;
+    }
+    if (resetting) return;
+    // Grabbing a selected item drags the whole selection, except inner nodes whose container is selected too (they
+    // follow their box). Grabbing anything else clears the selection and drags just that item.
+    const group = selection.has(id);
+    if (!group) clearSelection();
+    const ids = group
+      ? [...selection].filter((s) => { const cid = geo.containerOf[s]; return !(cid && selection.has(cid)); })
+      : [id];
+    const items = ids.map(dragItem).filter((it): it is DragItem => !!it);
+    if (!items.length) return;
     const el = e.currentTarget as Element;
-    const d: Drag = {
-      id, kind, sx: e.clientX, sy: e.clientY, k: view.k, origin: { x: origin.x, y: origin.y },
-      base: base ? { x: base.x, y: base.y } : undefined, last: null, pointerId: e.pointerId, el,
-    };
+    const d: Drag = { items, sx: e.clientX, sy: e.clientY, k: view.k, last: null, pointerId: e.pointerId, el };
     drag.current = d;
     // Capture on the element that got pointerdown (keeps delivery when the pointer outruns the box or leaves the
     // window); listeners on window so neither React re-renders nor hit-testing can drop a move or the up.
@@ -375,10 +487,10 @@ export default function FlowTab() {
     const onMove = (ev: PointerEvent) => {
       if (drag.current !== d || ev.pointerId !== d.pointerId) return;
       if (!d.last && ev.clientX === d.sx && ev.clientY === d.sy) return;
-      d.last = dragTarget(d, ev.clientX, ev.clientY);
-      moved.current.add(d.id);
-      const p = d.last;
-      setPos((prev) => ({ ...prev, [d.id]: p }));
+      const p = dragTargets(d, ev.clientX, ev.clientY);
+      d.last = p;
+      for (const it of d.items) moved.current.add(it.id);
+      setPos((prev) => ({ ...prev, ...p }));
     };
     const onUp = (ev: PointerEvent) => {
       if (ev.pointerId !== d.pointerId) return;
@@ -386,7 +498,7 @@ export default function FlowTab() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       if (drag.current !== d) return;
-      if (ev.type === "pointerup" && d.last) d.last = dragTarget(d, ev.clientX, ev.clientY);
+      if (ev.type === "pointerup" && d.last) d.last = dragTargets(d, ev.clientX, ev.clientY);
       endDrag(d);
     };
     window.addEventListener("pointermove", onMove);
@@ -406,6 +518,7 @@ export default function FlowTab() {
     setResetting(true);
     try {
       drag.current = null;
+      setSelection(EMPTY_SELECTION);
       moved.current = new Set(); // cleared first so the unload safety net cannot re-write the dropped keys
       clearLocalPositions(posKey);
       await api.saveFlowPositions(projectId, {}).catch(() => { /* server store is optional now */ });
@@ -444,6 +557,7 @@ export default function FlowTab() {
     const b = geo.boxes[c.id];
     if (!b) return null;
     const isSel = selected === c.id;
+    const inSel = selection.has(c.id);
     const av = c.app ? appAgentView(agentFeed, projectId, containerAppId(c), agentNow) : null;
     const ag = av?.kind === "reported" ? stateGlyph(av.app.state) : null;
     // Room for the right-aligned "● attached" (+ agent state) text when the box is an app: measured, plus a gap.
@@ -461,9 +575,10 @@ export default function FlowTab() {
     return (
       <g
         key={c.id}
-        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${compact ? "compact" : ""}`}
+        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}`}
+        data-selected={inSel ? "true" : undefined}
         transform={`translate(${b.x},${b.y})`}
-        onPointerDown={(e) => beginDrag(e, c.id, "container")}
+        onPointerDown={(e) => beginDrag(e, c.id)}
         {...(compact ? { "data-label": c.label, "aria-label": c.label } : {})}
       >
         <title>
@@ -502,6 +617,7 @@ export default function FlowTab() {
     const missing = isMissing(n);
     const hot = !missing && (c ? c.dlqHot : !!n.sb?.dlqHot); // a missing entity is never DLQ-hot (ADDENDA-009)
     const isSel = selected === n.id;
+    const inSel = selection.has(n.id);
     const rq = selfRequeue(n);
     const timers = n.kind === "handler" ? triggersOf(n, "timer") : [];
     const blobs = n.kind === "handler" ? triggersOf(n, "blob") : [];
@@ -511,8 +627,9 @@ export default function FlowTab() {
       <g
         key={n.id}
         transform={`translate(${p.x},${p.y})`}
-        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${missing ? "missing" : ""}`}
-        onPointerDown={(e) => beginDrag(e, n.id, "node")}
+        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}`}
+        data-selected={inSel ? "true" : undefined}
+        onPointerDown={(e) => beginDrag(e, n.id)}
         style={{ cursor: "grab" }}
       >
         <title>
@@ -530,8 +647,8 @@ export default function FlowTab() {
           rx={n.kind === "app" || n.kind === "handler" ? 8 : 3}
           style={{
             fill: style.fill,
-            stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : style.stroke,
-            strokeWidth: isSel || hot ? 2.5 : 1.2,
+            // Multi-selected: stroke + glow come from `g.node.selected > rect` in styles.css (inline would win).
+            ...(inSel ? {} : { stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : style.stroke, strokeWidth: isSel || hot ? 2.5 : 1.2 }),
             strokeDasharray: style.dash,
           }}
         />
@@ -588,6 +705,7 @@ export default function FlowTab() {
             {positionStats.local > 0 ? ` (${positionStats.local} local)` : positionStats.stored > 0 ? ` (${positionStats.stored} stored)` : ""}
           </span>
         )}
+        {selection.size > 0 && <span className="muted selection-count">{selection.size} selected</span>}
         {confirmReset ? (
           <span className="inline-confirm" role="alertdialog" aria-label="Reset positions?">
             Reset positions?
@@ -670,6 +788,7 @@ export default function FlowTab() {
               );
             })}
             {graph.nodes.map(renderNode)}
+            {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
             </g>
           </svg>
           <FlowLegend rootRef={legendRef} />

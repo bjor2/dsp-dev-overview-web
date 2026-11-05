@@ -153,3 +153,10 @@ tr.missing td { color: #64748b; }
 .dspwatch-copy { font-size: 11px; padding: 0 6px; line-height: 18px; font-style: normal; }
 .console.agent .dspwatch-cmd { background: #1f2937; color: #e5e7eb; border-color: #374151; }
 .console.agent .dspwatch-copy { background: #1f2937; color: #e5e7eb; border-color: #4b5563; }
+/* Flow multi-selection (shift+click / shift+drag marquee): accent stroke + soft glow, after .hot/.sel so it wins.
+   `> rect` = the node's own box only, not its requeue/trigger badges. */
+.node.selected > rect { stroke: #2563eb; stroke-width: 2.5; filter: drop-shadow(0 0 3px #2563eb99); }
+.container-box.selected rect.box { stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: none; filter: drop-shadow(0 0 4px #2563eb80); }
+.container-box.selected path.hdr { fill: #2563eb33; }
+.marquee { fill: #2563eb14; stroke: #2563eb; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.selection-count { white-space: nowrap; }
