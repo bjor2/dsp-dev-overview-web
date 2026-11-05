@@ -11,17 +11,21 @@ import { useAgentStatus, useNow } from "../agent/statusFeed";
 import { containerAppId } from "../agent/useProjectApps";
 import { CONTAINER_FONT, CONTAINER_SUB_FONT, NODE_FONT, fitSvgLabel, measureSvgText } from "./flow/labels";
 import SampleMessagePicker from "../components/SampleMessagePicker";
-import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
+import { nodeCounts, useFlowCounts, type FlowNodeCounts } from "../flow/useFlowCounts";
+import { edgeKey, type FeedItem } from "./flow/activity";
+import { useFlowActivity, usePrefersReducedMotion } from "./flow/useFlowActivity";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
 import { clearLocalPositions, loadLocalPositions, mergeLocalPositions, storageKey } from "./flow/localPositions";
-import type { FlowEdge, HandlerTrigger } from "../api/types";
+import type { FlowEdge, FlowNode, HandlerTrigger } from "../api/types";
 import type { ProjectOutletContext } from "./ProjectDetailLayout";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
-  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, settleLayout,
+  EMPTY_GEOMETRY, H, HDR, W, clampInner, computeLayers, contentBounds, deriveGeometry, edgePath, headerPath, nodeRect, settleLayout,
 } from "./flow/layout";
 
 const ZMIN = 0.2, ZMAX = 3;
+/** `.activity-badge text` (styles.css). */
+const BADGE_FONT = { font: "700 10px system-ui, sans-serif", letterSpacing: 0 };
 
 /** Single palette for canvas + legend. */
 const PALETTE = {
@@ -109,18 +113,58 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
             <div>{line(PALETTE.back)} back-edge (upward)</div>
             <div><code>a 3 · DLQ 7</code> active · dead-letter</div>
             <div><code>a — · DLQ —</code> count unknown (Service Bus did not answer)</div>
+            <div><span className="legend-activity pulse" /> message landed · <span className="legend-activity dlq" /> DLQ grew</div>
+            <div><span className="legend-activity executing" /> executing · <span className="legend-activity succeeded" /> ok · <span className="legend-activity failed" /> failed</div>
             <div><span style={{ color: PALETTE.attached }}>●</span> attached <span style={{ color: PALETTE.detached }}>○</span> not attached</div>
             <div className="agent-states" title="App state reported by the local agent (container header)">
               {Object.entries(STATE_GLYPH).map(([k, g]) => <span key={k}><span style={{ color: g.color }}>{g.glyph}</span> {k} </span>)}
             </div>
             <div><span className="state-unknown">?</span> state unknown (agent)</div>
             <div className="muted">drag node · drag box header moves its nodes · drag canvas pans · wheel zooms</div>
+            <div className="muted">shift+click / shift+drag selects · drag selection moves group · Esc clears</div>
           </div>
         </div>
       )}
     </div>
   );
 }
+
+const FEED_KEY = "flow.activity.collapsed";
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+/** Last ~20 activity events (newest first); a row selects its node. Overlays the canvas top-right. */
+function ActivityFeed({ feed, onPick, onClear, live }: { feed: readonly FeedItem[]; onPick: (nodeId: string) => void; onClear: () => void; live: string }) {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(FEED_KEY) === "1");
+  const toggle = () => setCollapsed((c) => { localStorage.setItem(FEED_KEY, c ? "0" : "1"); return !c; });
+  return (
+    <div className={`flow-activity-feed${collapsed ? " collapsed" : ""}`} onPointerDown={(e) => e.stopPropagation()} aria-live="polite">
+      <div className="feed-head">
+        <button type="button" className="ghost legend-toggle" onClick={toggle} aria-expanded={!collapsed}>
+          {collapsed ? "▸" : "▾"} Activity{feed.length ? ` (${feed.length})` : ""}
+        </button>
+        {!collapsed && feed.length > 0 && <button type="button" className="ghost feed-clear" onClick={onClear} title="Clear the feed">clear</button>}
+      </div>
+      {!collapsed && (feed.length === 0 ? (
+        <div className="muted feed-empty">Waiting for messages… ({live})</div>
+      ) : (
+        <ol>
+          {feed.map((i) => (
+            <li key={i.id} className={`feed-item ${i.kind}`} data-node={i.nodeId}>
+              <time>{clock(i.at)}</time>
+              <a href="#" title={`Select ${i.nodeId}`} onClick={(e) => { e.preventDefault(); onPick(i.nodeId); }}>{i.text}</a>
+              {i.count > 1 && <span className="feed-count">×{i.count}</span>}
+            </li>
+          ))}
+        </ol>
+      ))}
+    </div>
+  );
+}
+
+/** SMIL ignores begin="0s" on elements inserted after load (it is relative to the document start): start it now. */
+const beginNow = (el: SVGAnimationElement | null) => { try { el?.beginElement(); } catch { /* jsdom / no SMIL */ } };
+const NO_NODES: FlowNode[] = [];
+const NO_CONTAINERS: FlowContainer[] = [];
 
 type View = { x: number; y: number; k: number };
 /**
@@ -129,18 +173,31 @@ type View = { x: number; y: number; k: number };
  * exactly where the pointer is. `last` is the latest position written to state, in the WIRE frame (containers /
  * standalone absolute, inner nodes relative to their container) — pointer-up reads this, not React state, because
  * the final pointermove is often not rendered yet when pointerup arrives.
+ * A drag moves one item, or the whole multi-selection when the grabbed item is part of it: every item gets the
+ * same client delta applied to its own drag-start origin.
  */
-type Drag = {
+type DragItem = {
   id: string;
-  kind: "node" | "container";
-  sx: number; sy: number; k: number;
+  /** Drag-start position (absolute): the box origin for containers, the absolute node position otherwise. */
   origin: XY;
   /** Container origin (absolute) when dragging an inner node. */
   base?: XY;
-  last: XY | null;
+};
+type Drag = {
+  items: DragItem[];
+  sx: number; sy: number; k: number;
+  /** Latest wire-frame position per dragged id (null until the pointer first moves). */
+  last: PosMap | null;
   pointerId: number;
   el: Element;
 };
+/** Axis-aligned box in graph coordinates without an id (marquee, hit tests). */
+type Box = Omit<Rect, "id">;
+/** A pointerdown→up that moved less than this (px) is a click, not a drag. */
+const CLICK_SLOP = 3;
+const isClick = (sx: number, sy: number, ev: PointerEvent) => Math.hypot(ev.clientX - sx, ev.clientY - sy) < CLICK_SLOP;
+const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 const edgeTooltip = (e: FlowEdge) =>
   `${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]` +
   (e.sources?.length ? "\n" + e.sources.map((s) => "  " + s).join("\n") : "");
@@ -155,6 +212,10 @@ export default function FlowTab() {
   const [showCloud, setShowCloud] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  /** Multi-selection (node + container ids): shift+click toggles, shift+drag marquee adds, a drag moves all of it. */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(EMPTY_SELECTION);
+  /** Live marquee in graph coordinates while shift-dragging on the empty canvas. */
+  const [marquee, setMarquee] = useState<Box | null>(null);
   /** Wire frame (ADDENDA-008 §7): container ids absolute, inner node ids RELATIVE to their container, others absolute. */
   const [pos, setPos] = useState<PosMap>({});
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
@@ -185,7 +246,27 @@ export default function FlowTab() {
   useEffect(() => {
     moved.current = new Set();
     needFit.current = true;
+    setSelection(EMPTY_SELECTION);
+    setSelected(null);
   }, [projectId]);
+
+  /** Clears multi-selection AND the single focus (outline + side panel). Used by Esc, empty-canvas click, Reset. */
+  const clearSelection = useCallback(() => {
+    setSelection((s) => (s.size ? EMPTY_SELECTION : s));
+    setSelected(null);
+  }, []);
+  const toggleSelected = (id: string) =>
+    setSelection((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  // Esc clears multi-selection and focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") clearSelection(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clearSelection]);
 
   const graph = useMemo(() => (data ? normalizeGraph(data) : null), [data]);
   /** localStorage key for this project + env (dsp-flow-pos:v2:{project}:{env}); the ref is for drag-end / unload writes. */
@@ -210,6 +291,11 @@ export default function FlowTab() {
     });
   }, [visibleEdges]);
   const geo = useMemo(() => (graph ? deriveGeometry(graph, pos) : EMPTY_GEOMETRY), [graph, pos]);
+  /** Live message activity: count deltas + Functions host lines → node rings, edge dots, the feed. */
+  const activity = useFlowActivity({
+    projectId, nodes: graph?.nodes ?? NO_NODES, containers: graph?.containers ?? NO_CONTAINERS, edges: visibleEdges, counts, agentLines: !demoMode,
+  });
+  const reducedMotion = usePrefersReducedMotion();
 
   const fitView = useCallback((rects: Rect[]) => {
     const svg = svgRef.current;
@@ -276,6 +362,11 @@ export default function FlowTab() {
     const { pos: next, geo: g } = settleLayout(graph, visibleEdges, prev, pin);
     posRef.current = next;
     setPos(next);
+    // Drop selected ids the fresh graph no longer has (e.g. cloud nodes after "Show cloud edges" is turned off).
+    setSelection((s) => {
+      const keep = [...s].filter((id) => g.boxes[id] || g.absPos[id]);
+      return keep.length === s.size ? s : new Set(keep);
+    });
     if (needFit.current) {
       needFit.current = false;
       const rects = g.topRects;
@@ -313,28 +404,82 @@ export default function FlowTab() {
     };
   }, [posKey, flushLocal]);
 
-  // Pan: window listeners from pointerdown on the background until pointerup, absolute delta from the start.
-  const onBgPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || drag.current) return;
-    const pn = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
-    pan.current = pn;
-    const onMove = (ev: PointerEvent) => setView((v) => ({ ...v, x: pn.vx + ev.clientX - pn.sx, y: pn.vy + ev.clientY - pn.sy }));
-    const onUp = () => {
-      pan.current = null;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+  /**
+   * Track one pointer on window listeners until it is released: `onMove` for every move, `onEnd` once on
+   * pointerup / pointercancel (other pointers are ignored).
+   */
+  const trackPointer = (pointerId: number, onMove: ((ev: PointerEvent) => void) | null, onEnd: (ev: PointerEvent) => void) => {
+    const move = (ev: PointerEvent) => { if (ev.pointerId === pointerId) onMove?.(ev); };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      onEnd(ev);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
-  /** Latest drag-frame state → wire-frame position for the dragged id (inner nodes clamped inside their box). */
-  const dragTarget = (d: Drag, clientX: number, clientY: number): XY => {
-    const ax = d.origin.x + (clientX - d.sx) / d.k, ay = d.origin.y + (clientY - d.sy) / d.k;
-    return d.base ? clampInner({ x: ax - d.base.x, y: ay - d.base.y }, pad) : { x: ax, y: ay };
+  // Background pointerdown: shift → marquee select; otherwise pan (window listeners until pointerup, absolute delta
+  // from the start). A plain click (no movement) on the empty canvas clears multi-selection and focus.
+  const onBgPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || drag.current) return;
+    if (e.shiftKey) return beginMarquee(e);
+    const pn = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    pan.current = pn;
+    trackPointer(
+      e.pointerId,
+      (ev) => setView((v) => ({ ...v, x: pn.vx + ev.clientX - pn.sx, y: pn.vy + ev.clientY - pn.sy })),
+      (ev) => {
+        pan.current = null;
+        if (ev.type === "pointerup" && isClick(pn.sx, pn.sy, ev)) clearSelection();
+      },
+    );
   };
+
+  /**
+   * Shift+drag on the empty canvas: a marquee in graph coordinates (view snapshot from the start). On release every
+   * node and container whose bbox intersects it is ADDED to the selection.
+   */
+  const beginMarquee = (e: React.PointerEvent) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    const v = view;
+    const toGraph = (cx: number, cy: number): XY => ({ x: (cx - r.left - v.x) / v.k, y: (cy - r.top - v.y) / v.k });
+    const a = toGraph(e.clientX, e.clientY);
+    const boxTo = (ev: PointerEvent): Box => {
+      const b = toGraph(ev.clientX, ev.clientY);
+      return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+    };
+    trackPointer(
+      e.pointerId,
+      (ev) => setMarquee(boxTo(ev)),
+      (ev) => {
+        setMarquee(null);
+        if (ev.type !== "pointerup") return;
+        const m = boxTo(ev);
+        if (!m.w && !m.h) return; // shift+click on empty canvas: no-op
+        const hits = [
+          ...Object.values(geo.boxes).filter((b) => overlaps(m, b)).map((b) => b.id),
+          ...Object.entries(geo.absPos).filter(([id, p]) => overlaps(m, nodeRect(id, p))).map(([id]) => id),
+        ];
+        if (hits.length) setSelection((s) => new Set([...s, ...hits]));
+      },
+    );
+  };
+
+  /** Latest drag-frame state → wire-frame position for one dragged item (inner nodes clamped inside their box). */
+  const dragTarget = (d: Drag, it: DragItem, clientX: number, clientY: number): XY => {
+    const ax = it.origin.x + (clientX - d.sx) / d.k, ay = it.origin.y + (clientY - d.sy) / d.k;
+    return it.base ? clampInner({ x: ax - it.base.x, y: ay - it.base.y }, pad) : { x: ax, y: ay };
+  };
+  /** Wire-frame positions of every dragged item for one pointer position (same delta for all). */
+  const dragTargets = (d: Drag, clientX: number, clientY: number): PosMap =>
+    Object.fromEntries(d.items.map((it) => [it.id, dragTarget(d, it, clientX, clientY)]));
 
   const endDrag = (d: Drag) => {
     drag.current = null;
@@ -343,31 +488,51 @@ export default function FlowTab() {
     // The drop position is exactly where the user let go: `origin + (client − clientStart) / k`, computed once from
     // the drag-start snapshot (inner nodes only clamped inside their box). No de-overlap nudge here: it used to snap a
     // box that landed on another unit to the far side of that unit (a 150px drag to the right became a 218px drop).
-    // Read the drag's own last position, not React state: the last pointermove may not be rendered yet.
+    // Read the drag's own last positions, not React state: the last pointermove may not be rendered yet.
     const final = d.last;
-    const cur: PosMap = { ...posRef.current, [d.id]: final };
+    const cur: PosMap = { ...posRef.current, ...final };
     posRef.current = cur;
     setPos(cur);
-    // Exact graph id ("container:…" for boxes, node id otherwise) merged into this browser's localStorage map.
-    mergeLocalPositions(posKeyRef.current, { [d.id]: final });
+    // Exact graph ids ("container:…" for boxes, node id otherwise) merged into this browser's localStorage map.
+    mergeLocalPositions(posKeyRef.current, final);
     setLocalCount(Object.keys(loadLocalPositions(posKeyRef.current, graph)).length);
   };
 
-  const beginDrag = (e: React.PointerEvent, id: string, kind: Drag["kind"]) => {
-    e.stopPropagation();
-    if (e.button !== 0 || drag.current || resetting) return;
-    e.preventDefault();
-    // Box origin == the container's stored position (deriveGeometry puts the box at pos[c.id]; header and padding
-    // are drawn INSIDE the box), so the drag target is the wire position with no header/padding offset added.
-    const origin = kind === "container" ? geo.boxes[id] : geo.absPos[id];
-    if (!origin) return;
-    const cid = kind === "node" ? geo.containerOf[id] : undefined;
+  /**
+   * One item to drag. Box origin == the container's stored position (deriveGeometry puts the box at pos[c.id];
+   * header and padding are drawn INSIDE the box), so the drag target is the wire position with no header/padding
+   * offset added. Inner nodes also carry their container's origin, to convert back to the relative wire frame.
+   */
+  const dragItem = (id: string): DragItem | null => {
+    const origin = geo.boxes[id] ?? geo.absPos[id];
+    if (!origin) return null;
+    const cid = geo.containerOf[id];
     const base = cid ? posRef.current[cid] : undefined;
+    return { id, origin: { x: origin.x, y: origin.y }, base: base ? { x: base.x, y: base.y } : undefined };
+  };
+
+  const beginDrag = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    if (e.button !== 0 || drag.current) return;
+    e.preventDefault();
+    // Shift+click toggles the item in/out of the multi-selection; a shift+drag on an item moves nothing.
+    if (e.shiftKey) {
+      const sx = e.clientX, sy = e.clientY;
+      trackPointer(e.pointerId, null, (ev) => { if (ev.type === "pointerup" && isClick(sx, sy, ev)) toggleSelected(id); });
+      return;
+    }
+    if (resetting) return;
+    // Grabbing a selected item drags the whole selection, except inner nodes whose container is selected too (they
+    // follow their box). Grabbing anything else clears the selection and drags just that item.
+    const group = selection.has(id);
+    if (!group) clearSelection();
+    const ids = group
+      ? [...selection].filter((s) => { const cid = geo.containerOf[s]; return !(cid && selection.has(cid)); })
+      : [id];
+    const items = ids.map(dragItem).filter((it): it is DragItem => !!it);
+    if (!items.length) return;
     const el = e.currentTarget as Element;
-    const d: Drag = {
-      id, kind, sx: e.clientX, sy: e.clientY, k: view.k, origin: { x: origin.x, y: origin.y },
-      base: base ? { x: base.x, y: base.y } : undefined, last: null, pointerId: e.pointerId, el,
-    };
+    const d: Drag = { items, sx: e.clientX, sy: e.clientY, k: view.k, last: null, pointerId: e.pointerId, el };
     drag.current = d;
     // Capture on the element that got pointerdown (keeps delivery when the pointer outruns the box or leaves the
     // window); listeners on window so neither React re-renders nor hit-testing can drop a move or the up.
@@ -375,10 +540,10 @@ export default function FlowTab() {
     const onMove = (ev: PointerEvent) => {
       if (drag.current !== d || ev.pointerId !== d.pointerId) return;
       if (!d.last && ev.clientX === d.sx && ev.clientY === d.sy) return;
-      d.last = dragTarget(d, ev.clientX, ev.clientY);
-      moved.current.add(d.id);
-      const p = d.last;
-      setPos((prev) => ({ ...prev, [d.id]: p }));
+      const p = dragTargets(d, ev.clientX, ev.clientY);
+      d.last = p;
+      for (const it of d.items) moved.current.add(it.id);
+      setPos((prev) => ({ ...prev, ...p }));
     };
     const onUp = (ev: PointerEvent) => {
       if (ev.pointerId !== d.pointerId) return;
@@ -386,7 +551,7 @@ export default function FlowTab() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       if (drag.current !== d) return;
-      if (ev.type === "pointerup" && d.last) d.last = dragTarget(d, ev.clientX, ev.clientY);
+      if (ev.type === "pointerup" && d.last) d.last = dragTargets(d, ev.clientX, ev.clientY);
       endDrag(d);
     };
     window.addEventListener("pointermove", onMove);
@@ -406,6 +571,8 @@ export default function FlowTab() {
     setResetting(true);
     try {
       drag.current = null;
+      setSelection(EMPTY_SELECTION);
+      setSelected(null);
       moved.current = new Set(); // cleared first so the unload safety net cannot re-write the dropped keys
       clearLocalPositions(posKey);
       await api.saveFlowPositions(projectId, {}).catch(() => { /* server store is optional now */ });
@@ -437,13 +604,16 @@ export default function FlowTab() {
     if (n.kind === "handler") return handlerFunction(n) ?? (n.handler?.triggerEntityIds?.length ? "trigger: " + n.handler.triggerEntityIds.join(", ") : "handler");
     if (n.kind === "blobContainer") return "storage · blob container";
     if (isMissing(n)) return c ? `a — · DLQ — · not on namespace` : "not on namespace";
-    return c ? countsLabel(c) : n.kind;
+    return c ? countsText(c) : n.kind;
   };
+  /** Same text as countsLabel ("a 3 · DLQ 7"), with the DLQ part in its own tspan so `activity-dlq` can flash it. */
+  const countsText = (c: FlowNodeCounts) => <>a {c.active ?? "—"} · <tspan className="dlq-count">DLQ {c.dlq ?? "—"}</tspan></>;
 
   const renderContainer = (c: FlowContainer) => {
     const b = geo.boxes[c.id];
     if (!b) return null;
     const isSel = selected === c.id;
+    const inSel = selection.has(c.id);
     const av = c.app ? appAgentView(agentFeed, projectId, containerAppId(c), agentNow) : null;
     const ag = av?.kind === "reported" ? stateGlyph(av.app.state) : null;
     // Room for the right-aligned "● attached" (+ agent state) text when the box is an app: measured, plus a gap.
@@ -461,9 +631,10 @@ export default function FlowTab() {
     return (
       <g
         key={c.id}
-        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${compact ? "compact" : ""}`}
+        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}`}
+        data-selected={inSel ? "true" : undefined}
         transform={`translate(${b.x},${b.y})`}
-        onPointerDown={(e) => beginDrag(e, c.id, "container")}
+        onPointerDown={(e) => beginDrag(e, c.id)}
         {...(compact ? { "data-label": c.label, "aria-label": c.label } : {})}
       >
         <title>
@@ -502,17 +673,25 @@ export default function FlowTab() {
     const missing = isMissing(n);
     const hot = !missing && (c ? c.dlqHot : !!n.sb?.dlqHot); // a missing entity is never DLQ-hot (ADDENDA-009)
     const isSel = selected === n.id;
+    const inSel = selection.has(n.id);
     const rq = selfRequeue(n);
     const timers = n.kind === "handler" ? triggersOf(n, "timer") : [];
     const blobs = n.kind === "handler" ? triggersOf(n, "blob") : [];
     const style = missing ? PALETTE.missing : kindStyle(n.kind);
     const label = fitSvgLabel(n.label, W - 16 - (rq.length > 0 ? 60 : 0), NODE_FONT);
+    const act = activity.nodeClasses.get(n.id);
+    const actText = activity.nodeTitles.get(n.id);
+    const badge = activity.nodeBadges.get(n.id);
+    const rx = n.kind === "app" || n.kind === "handler" ? 8 : 3;
     return (
       <g
         key={n.id}
         transform={`translate(${p.x},${p.y})`}
-        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${missing ? "missing" : ""}`}
-        onPointerDown={(e) => beginDrag(e, n.id, "node")}
+        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}${act ? " " + act : ""}`}
+        data-id={n.id}
+        data-selected={inSel ? "true" : undefined}
+        data-activity={actText}
+        onPointerDown={(e) => beginDrag(e, n.id)}
         style={{ cursor: "grab" }}
       >
         <title>
@@ -523,15 +702,17 @@ export default function FlowTab() {
               : n.sb?.maxDeliveryCount != null
                 ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
                 : `${n.label}${n.containerId ? " · in " + containerLabel(n.containerId) : ""} · drag to move`}
+          {actText ? `\n⚡ ${actText}` : ""}
         </title>
+        {act && <rect key={act + actText} className="activity-ring" x={-4} y={-4} width={W + 8} height={H + 8} rx={rx + 4} />}
         <rect
           width={W}
           height={H}
-          rx={n.kind === "app" || n.kind === "handler" ? 8 : 3}
+          rx={rx}
           style={{
             fill: style.fill,
-            stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : style.stroke,
-            strokeWidth: isSel || hot ? 2.5 : 1.2,
+            // Multi-selected: stroke + glow come from `g.node.selected > rect` in styles.css (inline would win).
+            ...(inSel ? {} : { stroke: isSel ? PALETTE.sel : hot ? PALETTE.hot : style.stroke, strokeWidth: isSel || hot ? 2.5 : 1.2 }),
             strokeDasharray: style.dash,
           }}
         />
@@ -541,6 +722,17 @@ export default function FlowTab() {
         <text x={8} y={33} className="t2">
           {nodeSubtitle(n, c)}
         </text>
+        {/* Activity chip straddles the bottom-right border: the top edge belongs to the requeue / trigger badges, and
+            anything beside the box would sit under the next node (drawn later). */}
+        {badge && (() => {
+          const bw = Math.ceil(measureSvgText(badge.text, BADGE_FONT)) + 14;
+          return (
+            <g className={`activity-badge ${badge.kind}`} transform={`translate(${W - bw - 4},${H - 8})`}>
+              <rect width={bw} height={16} rx={8} />
+              <text x={bw / 2} y={11.5} textAnchor="middle">{badge.text}</text>
+            </g>
+          );
+        })()}
         {rq.length > 0 && (
           <g className="requeue-badge" transform={`translate(${W - 66},-9)`}>
             <title>{requeueTooltip(n)}</title>
@@ -588,6 +780,7 @@ export default function FlowTab() {
             {positionStats.local > 0 ? ` (${positionStats.local} local)` : positionStats.stored > 0 ? ` (${positionStats.stored} stored)` : ""}
           </span>
         )}
+        {selection.size > 0 && <span className="muted selection-count">{selection.size} selected</span>}
         {confirmReset ? (
           <span className="inline-confirm" role="alertdialog" aria-label="Reset positions?">
             Reset positions?
@@ -660,7 +853,8 @@ export default function FlowTab() {
               const d = edgePath(a, b);
               const back = layers[e.to] !== undefined && layers[e.to] <= layers[e.from];
               const fromBlob = kindOf.get(e.from) === "blobContainer";
-              const cls = `edge${back ? " back" : ""} ${e.kind} ${fromBlob ? "from-blobContainer" : ""} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
+              const lit = activity.edgeDots.has(edgeKey(e));
+              const cls = `edge${back ? " back" : ""} ${e.kind} ${fromBlob ? "from-blobContainer" : ""} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}${lit ? " activity-edge" : ""}`;
               // Exactly one path per from→to and exactly one marker on it (markerEnd = the target node). No
               // markerStart, no hit-area twin: a second path would get its own arrowhead and read as double-headed.
               return (
@@ -669,10 +863,28 @@ export default function FlowTab() {
                 </path>
               );
             })}
+            {/* Travelling dots (one per lit edge, remounted per event so the motion restarts); none under reduced motion. */}
+            {!reducedMotion && drawnEdges.map((e) => {
+              const k = activity.edgeDots.get(edgeKey(e));
+              const a = geo.absPos[e.from], b = geo.absPos[e.to];
+              if (k === undefined || !a || !b) return null;
+              return (
+                <circle key={e.id + ":" + k} className="activity-dot" r={4.5} data-edge={edgeKey(e)}>
+                  <animateMotion ref={beginNow} dur="1.1s" begin="indefinite" fill="freeze" path={edgePath(a, b)} />
+                </circle>
+              );
+            })}
             {graph.nodes.map(renderNode)}
+            {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
             </g>
           </svg>
           <FlowLegend rootRef={legendRef} />
+          <ActivityFeed
+            feed={activity.feed}
+            onPick={setSelected}
+            onClear={activity.clearFeed}
+            live={demoMode ? "demo data: counts only" : "counts every 2.5 s · Functions lines from the local agent"}
+          />
           </div>
           <aside className="side-panel">
             {!sel && !selContainer && <Empty>Select or drag a node or container.</Empty>}

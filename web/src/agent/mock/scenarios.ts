@@ -61,17 +61,61 @@ export function scenarioStatus(s: ScenarioName, now: number): AgentStatus | null
 }
 
 const FUNCS = ["PriceQueueHandler", "PriceBatchHandler", "CustomerAgreementHeadHandler", "SalePriceListHandler"];
+const ESC = "\x1b";
+const OSLO = new Intl.DateTimeFormat("nb-NO", { timeZone: "Europe/Oslo", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const osloClock = (ms: number) => `${OSLO.format(new Date(ms))}.${String(new Date(ms).getMilliseconds()).padStart(3, "0")}`;
+
+/** Unhandled exception as the .NET console logger writes it: `fail:` header, indented message, then 12 frame lines. */
+const STACK = [
+  "      System.InvalidOperationException: Sequence contains no elements",
+  "         at System.Linq.ThrowHelper.ThrowNoElementsException()",
+  "         at System.Linq.Enumerable.First[TSource](IEnumerable`1 source)",
+  "         at Dsp.Price.Ingress.PriceRouter.Resolve(String customerId) in C:\\src\\dsp-price\\Ingress\\PriceRouter.cs:line 87",
+  "         at Dsp.Price.Ingress.PriceRouter.HandleAsync(HttpContext ctx) in C:\\src\\dsp-price\\Ingress\\PriceRouter.cs:line 41",
+  "      --- End of stack trace from previous location ---",
+  "         at Microsoft.AspNetCore.Routing.EndpointMiddleware.<Invoke>g__AwaitRequestTask|7_0(Endpoint endpoint, Task requestTask, ILogger logger)",
+  "         at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)",
+  "         at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)",
+  "         at Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http.HttpProtocol.ProcessRequests[TContext](IHttpApplication`1 application)",
+  "      --- End of stack trace from previous location ---",
+  "         at Yarp.ReverseProxy.Forwarder.HttpForwarder.SendAsync(HttpContext context, String destinationPrefix)",
+  "         at Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http.HttpProtocol.ProcessRequests[TContext](IHttpApplication`1 application)",
+];
+
+/**
+ * The polish block: lines 5..35 of every 50 carry what the console has to clean up (ANSI with and without ESC, an
+ * exception with a folded stack, the app's own timestamp echoing `ts`, ANSI-only red / yellow). Null = ordinary line.
+ */
+function polishLine(n: number, now: number): string | null {
+  const k = n % 50;
+  if (k === 5) return `${ESC}[90m[ingress]${ESC}[39;49m ${ESC}[32mGET${ESC}[39m /api/price/customer/1042 ${ESC}[1m200${ESC}[22m ${ESC}[90m12 ms${ESC}[0m`;
+  if (k === 7) return "[39;49m[90m[ingress][39m [33mwarn[39m: upstream price-api slow (1 840 ms), retrying[0m";
+  if (k === 9) return "[41m[30mfail[39m[22m[49m: Microsoft.AspNetCore.Server.Kestrel[13]";
+  if (k === 10) return `      Connection id "0HN8K${n}", Request id "0HN8K${n}:00000002": An unhandled exception was thrown by the application.`;
+  if (k >= 11 && k < 11 + STACK.length) return STACK[k - 11];
+  if (k === 25) return `${osloClock(now)} [90minfo[39m: price batch tick (${n} queued)`;
+  if (k === 27) return `[${new Date(now).toISOString().slice(11, 19)} INF] Leasing partition ${n % 8} for queue 'price'`;
+  if (k === 29) return `${ESC}[33mlock renewal for 'price' took 4.1 s${ESC}[39m`;
+  if (k === 31) return `${ESC}[31mprice-api answered 502 Bad Gateway${ESC}[39m`;
+  if (k === 33) return `Executed 'Functions.${FUNCS[n % FUNCS.length]}' (Failed, Id=${(n * 2654435761 >>> 0).toString(16)}, Duration=${(n * 37) % 900 + 12}ms)`;
+  return null;
+}
+
 /**
  * Line number `n` (1-based reader seq) of the app's dspwatch output. Every 40th carries a redacted secret, every 100th
  * is 4 KiB and truncated, every 500th is the agent's own drop notice. `agentSeq` restarts every 1000 lines (as if
- * the agent restarted) so a client that keys on `seq` instead of `rseq` breaks visibly.
+ * the agent restarted, announced by an `[agent]` line) so a client that keys on `seq` instead of `rseq` breaks
+ * visibly. Lines 5..35 of every 50 come from polishLine.
  */
 export function mockLine(n: number, now: number): AgentConsoleLine {
   const fn = FUNCS[n % FUNCS.length];
   let line: string;
   let redacted = false;
   let truncated = false;
+  const polish = polishLine(n, now);
   if (n % 500 === 0) line = "[agent] dropped 12 lines";
+  else if (n > 1 && n % 1000 === 1) line = `[agent] dspwatch restarted app:functions (pid ${7010 + Math.floor(n / 1000)})`;
+  else if (polish !== null) line = polish;
   else if (n % 100 === 0) { line = `Executing 'Functions.${fn}' payload dump: ` + "x".repeat(4096 - 40); truncated = true; }
   else if (n % 40 === 0) { line = `Endpoint=sb://sb-870-dev-euw-dahl.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=***`; redacted = true; }
   else if (n % 2 === 0) line = `Executed 'Functions.${fn}' (Succeeded, Id=${(n * 2654435761 >>> 0).toString(16)}, Duration=${(n * 37) % 900 + 12}ms)`;

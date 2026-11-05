@@ -1,10 +1,12 @@
 // Read-only console fed by the local agent (§2). Nothing here can start or stop an app (ADDENDA-010 §0).
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fmtOslo } from "../components/common";
 import { useDemo } from "../components/DemoContext";
+import type { AnsiSegment } from "./ansi";
+import { buildRows, fmtTs, passesLevel, type DisplayRow, type LevelFilter } from "./consoleFormat";
 import { useNow } from "./statusFeed";
 import { busyText, declaredPorts, stateGlyph, type ConsoleUnavailableReason } from "./derive";
-import { useAppConsole, type ConsoleEntry, type ConsolePhase } from "./useAppConsole";
+import { useAppConsole, type ConsolePhase } from "./useAppConsole";
 
 /** Exact banner copy (the Playwright plan asserts on these strings). The dspwatch hint follows it in the banner. */
 export function unavailableText(reason: ConsoleUnavailableReason, appId: string, lastSeen?: string, detail?: string): string {
@@ -67,29 +69,53 @@ function DspwatchHint() {
   return <span className="dspwatch-hint">Start the app with <DspwatchCommand /> to get live output.</span>;
 }
 
-const OSLO_TIME = new Intl.DateTimeFormat("nb-NO", { timeZone: "Europe/Oslo", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-/** Oslo wall clock with milliseconds: 15:02:11.123 */
-const fmtTs = (iso: string) => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${OSLO_TIME.format(d)}.${String(d.getMilliseconds()).padStart(3, "0")}`;
-};
 const nb = (n: number) => n.toLocaleString("nb-NO");
 
-const Row = memo(function Row({ e }: { e: ConsoleEntry }) {
-  if (e.kind === "system") return <div className="line system ui">{e.text}</div>;
-  const l = e.line;
-  const agentSystem = l.line.startsWith("[agent] ");
+function Segs({ segs }: { segs: readonly AnsiSegment[] }) {
+  return <>{segs.map((s, i) => (s.cls ? <span key={i} className={s.cls}>{s.text}</span> : s.text))}</>;
+}
+
+type GroupRow = Extract<DisplayRow, { kind: "group" }>;
+interface GroupProps { g: GroupRow; open: boolean; hidden: boolean; prevRun: boolean; onToggle: (seq: number) => void }
+
+/** One agent line plus the stack frames folded under it (frames stay in the DOM, `hidden` while collapsed). */
+const GroupRowView = memo(function GroupRowView({ g, open, hidden, prevRun, onToggle }: GroupProps) {
+  const l = g.entry.line;
+  const n = g.frames.length;
+  const cls = `${prevRun ? " prev-run" : ""}${g.fmt.agent ? " system" : ""}`;
   return (
-    <div className={`line${l.redacted ? " redacted" : ""}${l.truncated ? " truncated" : ""}${agentSystem ? " system" : ""}`} data-seq={e.seq}>
-      <span className="ts">{fmtTs(l.ts)}</span>
-      <span className="src" title={l.source}>{l.source}</span>
-      <span className="txt">{l.line}</span>
-      {l.redacted && <span className="flag" title="Secrets replaced by ***">redacted</span>}
-      {l.truncated && <span className="flag" title="Cut to 4 KiB by the agent">truncated</span>}
-    </div>
+    <>
+      <div className={`line${l.redacted ? " redacted" : ""}${l.truncated ? " truncated" : ""}${cls}`} data-seq={g.entry.seq} data-level={g.level} hidden={hidden}>
+        <span className="ts">{fmtTs(l.ts)}</span>
+        <span className="src" title={l.source}>{l.source}</span>
+        <span className="txt"><Segs segs={g.fmt.segs} /></span>
+        {l.redacted && <span className="flag" title="Secrets replaced by ***">redacted</span>}
+        {l.truncated && <span className="flag" title="Cut to 4 KiB by the agent">truncated</span>}
+      </div>
+      {n > 0 && (
+        <button
+          type="button" className={`stack-toggle ${open ? "stack-expanded" : "stack-collapsed"}${cls}`} data-testid="stack-toggle"
+          data-level={g.level} aria-expanded={open} hidden={hidden} onClick={() => onToggle(g.entry.seq)}
+        >
+          {open ? "▾" : "▸"} {n} stack frame{n === 1 ? "" : "s"}
+        </button>
+      )}
+      {g.frames.map((f) => (
+        <div key={f.entry.seq} className={`line frame${cls}`} data-seq={f.entry.seq} data-level={g.level} hidden={hidden || !open}>
+          <span className="txt"><Segs segs={f.fmt.segs} /></span>
+        </div>
+      ))}
+    </>
   );
-});
+}, (a, b) =>
+  a.g.entry === b.g.entry && a.g.fmt === b.g.fmt && a.g.level === b.g.level && a.g.frames.length === b.g.frames.length &&
+  a.g.frames[0]?.entry === b.g.frames[0]?.entry && a.open === b.open && a.hidden === b.hidden && a.prevRun === b.prevRun && a.onToggle === b.onToggle);
+
+const LEVEL_CHIPS: { id: LevelFilter; label: string; title: string }[] = [
+  { id: "all", label: "All", title: "Every line" },
+  { id: "warn", label: "Warn+", title: "Warnings and errors" },
+  { id: "error", label: "Error", title: "Errors only" },
+];
 
 function streamText(p: ConsolePhase, now: number): string {
   switch (p.phase) {
@@ -107,6 +133,8 @@ export default function AgentConsolePanel({ regId, appId }: { regId: string; app
   const now = useNow(1000);
   const preRef = useRef<HTMLPreElement>(null);
   const programmatic = useRef(false);
+  const [level, setLevel] = useState<LevelFilter>("all");
+  const [hidePrev, setHidePrev] = useState(true);
 
   // Auto-scroll after every flush, only while following.
   useLayoutEffect(() => {
@@ -115,7 +143,7 @@ export default function AgentConsolePanel({ regId, appId }: { regId: string; app
     programmatic.current = true;
     pre.scrollTop = pre.scrollHeight;
     requestAnimationFrame(() => { programmatic.current = false; });
-  }, [state.lines, state.follow]);
+  }, [state.lines, state.follow, level, hidePrev]);
 
   const onScroll = () => {
     const pre = preRef.current;
@@ -132,6 +160,15 @@ export default function AgentConsolePanel({ regId, appId }: { regId: string; app
   const source = lastLine?.kind === "line" ? lastLine.line.source : null;
   const p = state.phase;
   const lineCount = state.lines.filter((e) => e.kind === "line").length;
+
+  const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set());
+  const onToggle = useCallback((seq: number) => setOpen((o) => {
+    const n = new Set(o);
+    if (!n.delete(seq)) n.add(seq);
+    return n;
+  }), []);
+  const { rows, lastRun, prevRunLines } = useMemo(() => buildRows(state.lines), [state.lines]);
+  const hidingPrev = hidePrev && lastRun > 0;
 
   return (
     <div className="agent-console">
@@ -157,6 +194,16 @@ export default function AgentConsolePanel({ regId, appId }: { regId: string; app
           {nb(lineCount)} lines{state.droppedByBuffer > 0 ? ` (${nb(state.droppedByBuffer)} older dropped)` : ""}
         </span>
         <span className="spacer" />
+        <span className="level-chips" data-testid="level-filter" role="group" aria-label="Level filter">
+          {LEVEL_CHIPS.map((c) => (
+            <button key={c.id} type="button" className={`chip${level === c.id ? " on" : ""}`} data-filter={c.id} aria-pressed={level === c.id} title={c.title} onClick={() => setLevel(c.id)}>
+              {c.label}
+            </button>
+          ))}
+        </span>
+        <label className="prev-runs-toggle" title={lastRun > 0 ? `${nb(prevRunLines)} lines from ${lastRun} earlier run${lastRun === 1 ? "" : "s"}` : "No restart seen in this buffer"}>
+          <input type="checkbox" checked={hidePrev} onChange={(ev) => setHidePrev(ev.target.checked)} /> Hide previous runs
+        </label>
         <button className="ghost" onClick={() => dispatch({ type: "clear" })}>Clear</button>
         <button className={state.follow ? "follow on" : "follow"} aria-pressed={state.follow} onClick={() => dispatch({ type: "follow", on: !state.follow })} title="Keep the newest line in view">
           ⤓ Follow
@@ -175,7 +222,22 @@ export default function AgentConsolePanel({ regId, appId }: { regId: string; app
               no live output for this app (agent console: {app.console}{app.console === "error" && app.reason ? ` — ${app.reason}` : ""}). <DspwatchHint />
             </div>
           )}
-          {state.lines.map((e) => <Row key={e.kind === "line" ? e.seq : e.id} e={e} />)}
+          {rows.map((r) => {
+            const prevRun = r.run < lastRun;
+            if (r.kind === "system") return <div key={r.key} className="line system ui">{r.entry.text}</div>;
+            if (r.kind === "divider") {
+              const latest = r.run === lastRun;
+              return (
+                <div key={r.key} className="run-divider" data-run={r.run} hidden={hidingPrev && !latest} role="separator">
+                  <span className="label">── new session ──</span>
+                  <span className="why">{fmtTs(r.ts)} · {r.reason}</span>
+                  {latest && hidingPrev && <span className="hidden-note">{nb(prevRunLines)} lines from previous runs hidden</span>}
+                </div>
+              );
+            }
+            const hidden = (hidingPrev && prevRun) || (!r.fmt.agent && !passesLevel(r.level, level));
+            return <GroupRowView key={r.key} g={r} open={open.has(r.entry.seq)} hidden={hidden} prevRun={prevRun} onToggle={onToggle} />;
+          })}
         </pre>
         {!state.follow && (
           <button className="console-paused" onClick={() => dispatch({ type: "follow", on: true })}>
