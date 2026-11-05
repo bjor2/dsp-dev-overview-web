@@ -74,6 +74,7 @@ svg.flow:active { cursor: grabbing; }
 .container-box.sel rect.box { stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: none; }
 .container-box .c1 { fill: #1e3a8a; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; pointer-events: none; }
 .container-box .c2 { fill: #475569; font-size: 10px; pointer-events: none; }
+.container-box .c2.compact { font-size: 13px; }
 .requeue-badge rect { fill: #fef3c7; stroke: #d97706; stroke-width: 1; }
 .requeue-badge text { fill: #92400e; font-size: 9.5px; font-weight: 600; pointer-events: none; }
 .legend-pill { display: inline-block; background: #fef3c7; border: 1px solid #d97706; color: #92400e; border-radius: 9px; padding: 0 6px; font-size: 10px; font-weight: 600; line-height: 15px; white-space: nowrap; margin-right: 4px; }
@@ -105,3 +106,50 @@ tr.missing td { color: #64748b; }
 .legend-pill .clock { fill: none; stroke: #3730a3; stroke-width: 1.3; stroke-linecap: round; vertical-align: -2px; }
 .side-panel .trigger-list { margin: 2px 0 6px; padding-left: 16px; font-size: 12px; }
 .no-samples { white-space: nowrap; }
+
+/* ADDENDA-010 §4: local agent indicator (project list + detail header) */
+.agent-pill { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border-radius: 10px; font-size: 12px; line-height: 18px; white-space: nowrap; border: 1px solid transparent; }
+.agent-pill .dot { width: 8px; height: 8px; }
+.agent-pill.online { background: #e6f6ea; border-color: #27ae60; color: #1e6b3c; }
+.agent-pill.online .dot { background: #27ae60; }
+.agent-pill .dot.live { animation: agent-pulse 2s ease-in-out infinite; }
+.agent-pill.stale { background: #fff6dc; border-color: #f2a900; color: #7a5600; }
+.agent-pill.stale .dot { background: #f2a900; }
+.agent-pill.offline, .agent-pill.none, .agent-pill.pending { background: #f1f2f4; border-color: #ccd; color: #778; }
+.agent-pill.offline .dot, .agent-pill.none .dot, .agent-pill.pending .dot { background: #999; }
+@keyframes agent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Agent console */
+.console-head { display: flex; align-items: flex-end; gap: 12px; }
+.console-head .tabs { flex: 1; }
+.source-toggle { display: inline-flex; align-items: center; gap: 0; margin-bottom: 6px; }
+.source-toggle .muted { margin-right: 6px; }
+.source-toggle button { border-radius: 0; margin-left: -1px; }
+.source-toggle button:first-of-type { border-radius: 5px 0 0 5px; }
+.source-toggle button:last-of-type { border-radius: 0 5px 5px 0; }
+.source-toggle button.on, button.follow.on { background: #eaf2ff; border-color: #2f80ed; color: #1d4ed8; }
+.console-toolbar .app-state { font-weight: 600; }
+.console-toolbar .busy { font-size: 12px; color: #b45309; }
+.console-wrap { position: relative; }
+.console.agent { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.console.agent .line { white-space: pre-wrap; word-break: break-all; }
+.console.agent .ts { color: #8b949e; margin-right: 10px; }
+.console.agent .src { color: #79c0ff; margin-right: 10px; display: inline-block; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
+.console.agent .flag { margin-left: 8px; padding: 0 5px; border: 1px solid #6e7681; border-radius: 8px; font-size: 10px; color: #c9d1d9; }
+.console.agent .line.redacted .flag { border-color: #d29922; color: #e3b341; }
+.console.agent .line.system, .console.agent .line.system .txt { color: #80d8ff; }
+.console.agent .line.notice { color: #e3b341; font-style: italic; margin-bottom: 4px; }
+.console-paused { position: absolute; right: 22px; bottom: 14px; background: #2f80ed; color: #fff; border-color: #2f80ed; box-shadow: 0 2px 6px #0006; }
+
+/* Flow: agent state glyphs in the legend + container header */
+.legend-col .state-unknown { display: inline-block; width: 14px; text-align: center; font-weight: 700; color: #94a3b8; }
+.legend-col .agent-states { gap: 2px; }
+.side-panel h4 { overflow-wrap: anywhere; }
+
+/* Agent console: lines only come from apps launched with dspwatch */
+.console-banner { flex-wrap: wrap; gap: 4px 6px; }
+.dspwatch { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dspwatch-cmd { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 5px; font-style: normal; }
+.dspwatch-copy { font-size: 11px; padding: 0 6px; line-height: 18px; font-style: normal; }
+.console.agent .dspwatch-cmd { background: #1f2937; color: #e5e7eb; border-color: #374151; }
+.console.agent .dspwatch-copy { background: #1f2937; color: #e5e7eb; border-color: #4b5563; }

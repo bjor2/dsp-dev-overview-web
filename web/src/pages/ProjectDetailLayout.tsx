@@ -5,6 +5,7 @@ import { useApi } from "../api/useApi";
 import { demoProjects } from "../mocks/demo";
 import { ErrorBanner, HealthDot, fmtOslo } from "../components/common";
 import type { ProjectSummary } from "../api/types";
+import AgentPill from "../agent/AgentPill";
 
 /** Shared with the tabs via <Outlet context>: the summary already fetched here (ADDENDA-009 notice lives on it). */
 export type ProjectOutletContext = { project: ProjectSummary | undefined };
@@ -22,6 +23,7 @@ export default function ProjectDetailLayout() {
       <div className="page-head">
         <h2>{p ? <><HealthDot health={p.health} /> {p.project}</> : projectId}</h2>
         {p && <span className="muted">registration {fmtOslo(p.registrationGeneratedAt)}</span>}
+        <AgentPill regId={projectId} appsTotal={p?.healthDetail.appsTotal} />
         {p?.traceItUrl && (
           <a className="ext-link" href={p.traceItUrl} target="_blank" rel="noopener noreferrer" title={p.traceItUrl}>
             TraceIt ↗

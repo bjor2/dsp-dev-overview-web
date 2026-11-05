@@ -5,6 +5,7 @@ import helmet from "helmet";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Issuer, generators } from "openid-client";
+import { createAgentIngest } from "./agent/routes.js";
 import { BOX_OFFLINE_BODY, boxResponseDown, chooseUpstream, createBoxHealth, responseHeaderAllowed, upstreamConfig, upstreamHeaders } from "./upstream.js";
 
 
@@ -55,6 +56,12 @@ app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
 
 app.get("/healthz", (_req, res) => res.type("text").send("ok"));
+
+// ADDENDA-010 §3: agent ingest. Mounted before the cookie session: bearer only, a cookie is rejected (§6).
+const agent = createAgentIngest(env, { log, defaultRegistrationsDir: path.join(__dirname0, "..", "registrations"), ...deps.agent });
+app.use("/agent/ingest", agent.ingest);
+app.locals.attachAgentIngest = (server) => agent.attach(server);
+app.locals.agent = agent;
 
 // Signed cookie session (HMAC with SESSION_SECRET), not the in-memory store: every Render deploy/restart wiped
 // MemoryStore, so open tabs got 401 on their next poll (SMOKE-render-upstream-20261103-1108). The cookie holds only
@@ -125,23 +132,27 @@ const logout = (req, res) => {
 app.get("/auth/logout", logout);
 app.post("/auth/logout", logout);
 
-// Everything below requires a session.
+// Everything below requires a session. /api and /agent answer JSON 401/403 instead of redirecting.
+const wantsJson = (p) => p.startsWith("/api") || p.startsWith("/agent");
 app.use((req, res, next) => {
   if (ALLOWLIST_MISSING) {
-    if (req.path.startsWith("/api")) return res.status(403).json({ error: { code: "ALLOWLIST_NOT_CONFIGURED", message: "Front door allowlist not configured", retryable: false } });
+    if (wantsJson(req.path)) return res.status(403).json({ error: { code: "ALLOWLIST_NOT_CONFIGURED", message: "Front door allowlist not configured", retryable: false } });
     return page(res, 403, "Not allowed (allowlist not configured).");
   }
   // Re-check on every request so an allowlist change also evicts existing sessions.
   if (req.session.user && !ALLOWED.includes(String(req.session.user.email || "").toLowerCase()))
-    return req.path.startsWith("/api") ? res.status(403).json({ error: { code: "FORBIDDEN", message: "Not allowed", retryable: false } }) : page(res, 403, "Not allowed.");
+    return wantsJson(req.path) ? res.status(403).json({ error: { code: "FORBIDDEN", message: "Not allowed", retryable: false } }) : page(res, 403, "Not allowed.");
   if (req.session.user) return next();
-  if (req.path.startsWith("/api")) return res.status(401).json({ error: "UNAUTHENTICATED" });
+  if (wantsJson(req.path)) return res.status(401).json({ error: "UNAUTHENTICATED" });
   // Keep the deep link across login (same-origin relative path only).
   if (req.method === "GET" && req.path !== "/" && !req.path.startsWith("/auth")) req.session.returnTo = req.originalUrl;
   res.redirect(302, "/auth/login");
 });
 
 app.get("/auth/me", (req, res) => res.json(req.session.user));
+
+// ADDENDA-010 §4 browser reads (session + ALLOWED_EMAILS via the gate above).
+app.use("/agent", agent.reads);
 
 // ADDENDA-006: /api → box (ngrok machine host, X-Dsp-Box-Key injected here, after the session gate) or render.
 const boxHealth = deps.boxHealth ?? createBoxHealth(UPSTREAM, fetchImpl);
@@ -194,6 +205,6 @@ app.get("/upstream-status", async (_req, res) => {
 app.use(express.static(DIST, { index: false }));
 app.get("*", (_req, res) => res.sendFile(path.join(DIST, "index.html")));
 
-app.locals.describe = () => `auth ${authConfigured ? "on" : "unconfigured"}, allowlist ${ALLOWLIST_MISSING ? "MISSING (403 all)" : "[" + ALLOWED.join(",") + "]"}, upstream ${UPSTREAM.mode}${UPSTREAM.mode === "box" ? ` (fallback ${UPSTREAM.fallback})` : ""}`;
+app.locals.describe = () => `agent ingest ${agent.auth.cfg.configured ? "on" : "unconfigured (503)"}, auth ${authConfigured ? "on" : "unconfigured"}, allowlist ${ALLOWLIST_MISSING ? "MISSING (403 all)" : "[" + ALLOWED.join(",") + "]"}, upstream ${UPSTREAM.mode}${UPSTREAM.mode === "box" ? ` (fallback ${UPSTREAM.fallback})` : ""}`;
 return app;
 }

@@ -1,22 +1,45 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
-import { APPS, type ConsoleChunk } from "../api/types";
+import type { ConsoleChunk } from "../api/types";
 import { useDemo } from "../components/DemoContext";
+import AgentConsolePanel from "../agent/AgentConsolePanel";
+import { useProjectApps } from "../agent/useProjectApps";
 
-// COMPONENTS.md: per-app ConsolePanel with Start / Stop / Restart (ADDENDUM §2: POST /restart only) + SSE stream.
+type Source = "agent" | "api";
+const SOURCES: [Source, string][] = [["agent", "Local agent"], ["api", "Overview API"]];
+
+// ADDENDA-010 §4: the console comes from the local agent (read-only). The Overview API console (Start / Stop / Restart,
+// ADDENDUM §2) stays available as LegacyConsolePanel behind the Source toggle.
 export default function ConsoleTab() {
   const { projectId = "" } = useParams();
-  const [app, setApp] = useState<string>(APPS[0].appId);
+  const { apps, loading } = useProjectApps(projectId);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [source, setSource] = useState<Source>("agent");
+  const app = (apps.find((a) => a.appId === picked) ?? apps[0])?.appId;
   return (
     <div>
-      <nav className="tabs small">{APPS.map((a) => <a key={a.appId} className={app === a.appId ? "active" : ""} onClick={() => setApp(a.appId)}>{a.label}</a>)}</nav>
-      <ConsolePanel key={app} projectId={projectId} appId={app} />
+      <div className="console-head">
+        <nav className="tabs small">
+          {loading ? <span className="muted">Loading apps…</span> : apps.map((a) => (
+            <a key={a.appId} className={app === a.appId ? "active" : ""} data-app={a.appId} onClick={() => setPicked(a.appId)}>{a.label}</a>
+          ))}
+        </nav>
+        <span className="source-toggle" role="group" aria-label="Console source">
+          <span className="muted">Source:</span>
+          {SOURCES.map(([k, label]) => (
+            <button key={k} type="button" className={source === k ? "on" : ""} aria-pressed={source === k} onClick={() => setSource(k)}>{label}</button>
+          ))}
+        </span>
+      </div>
+      {!loading && app && (source === "agent"
+        ? <AgentConsolePanel key={`${projectId}|${app}`} regId={projectId} appId={app} />
+        : <LegacyConsolePanel key={`${projectId}|${app}`} projectId={projectId} appId={app} />)}
     </div>
   );
 }
 
-function ConsolePanel({ projectId, appId }: { projectId: string; appId: string }) {
+function LegacyConsolePanel({ projectId, appId }: { projectId: string; appId: string }) {
   const { demoMode } = useDemo();
   const [lines, setLines] = useState<{ s: ConsoleChunk["stream"]; t: string }[]>([]);
   const [attached, setAttached] = useState<boolean | null>(null);

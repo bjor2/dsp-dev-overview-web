@@ -1,0 +1,583 @@
+{
+ "_source": "INTERIM (v1.3): the v1.2 dsp-agent fixture with console 'unavailable' rewritten to 'idle' (the only v1.3 wire change for detect-only output). Regenerate from `dsp-agent --json` (agent/samples/*.json) once the agent emits 'idle'. sessionId 'detect-only' because detect-only runs have no welcome.",
+ "main": {
+  "t": "hb",
+  "agentId": "simulated-agent",
+  "sessionId": "detect-only",
+  "hbSeq": 1,
+  "ts": "2026-11-04T15:00:00.000Z",
+  "apps": [
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:api",
+    "state": "running",
+    "rootPid": 1010,
+    "listeningPorts": [
+     5011
+    ],
+    "reason": "pid 1010:dahl.customerproject.api matches 'Dahl.CustomerProject.Api' (root 1010:dahl.customerproject.api); port 5011 listening (pid 1010)",
+    "pid": 1010,
+    "ports": [
+     {
+      "port": 5011,
+      "state": "listening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath",
+     "port"
+    ],
+    "startedAt": "2026-11-04T14:50:20.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:functions",
+    "state": "running",
+    "rootPid": 2000,
+    "listeningPorts": [
+     7239,
+     61234
+    ],
+    "reason": "pid 2010:dotnet matches 'Dahl.CustomerProject.Functions' (root 2000:func); port 7239 listening (pid 2000)",
+    "pid": 2000,
+    "ports": [
+     {
+      "port": 7239,
+      "state": "listening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "port"
+    ],
+    "startedAt": "2026-11-04T14:40:05.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:ingress",
+    "state": "starting",
+    "rootPid": 3000,
+    "listeningPorts": [],
+    "reason": "pid 3000:func matches 'Dahl.CustomerProject.Ingress.Functions' (root 3000:func); waiting for port 7240 (40s since root first seen, window 120s)",
+    "pid": 3000,
+    "ports": [
+     {
+      "port": 7240,
+      "state": "notListening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine"
+    ],
+    "startedAt": "2026-11-04T09:00:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api",
+    "state": "stopped",
+    "reason": "'Dahl.Price.Api' only matched processes that went to price.dev/app:api-batch (tier exact > substring); port 52160 held by pid 4000 (dotnet, command line unreadable); port 52161 held by pid 4000 (dotnet, command line unreadable)",
+    "ports": [
+     {
+      "port": 52160,
+      "state": "busyByOther"
+     },
+     {
+      "port": 52161,
+      "state": "busyByOther"
+     }
+    ],
+    "console": "idle",
+    "portBusyByOther": [
+     {
+      "port": 52160,
+      "pid": 4000,
+      "name": "dotnet"
+     },
+     {
+      "port": 52161,
+      "pid": 4000,
+      "name": "dotnet"
+     }
+    ]
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api-batch",
+    "state": "running",
+    "rootPid": 7000,
+    "listeningPorts": [
+     52171
+    ],
+    "reason": "pid 7000:dotnet,7010:dahl.price.api.batch matches 'Dahl.Price.Api.Batch' (root 7000:dotnet); port 52171 listening (pid 7010)",
+    "pid": 7010,
+    "ports": [
+     {
+      "port": 52170,
+      "state": "notListening"
+     },
+     {
+      "port": 52171,
+      "state": "listening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath",
+     "port"
+    ],
+    "startedAt": "2026-11-04T14:45:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:functions",
+    "state": "running",
+    "rootPid": 6000,
+    "listeningPorts": [
+     7071,
+     61300
+    ],
+    "reason": "pid 6010:dahl.price.functions matches 'Dahl.Price.Functions' (root 6000:func); declared port 7073 not listening after 120s (300s since root first seen); other matches went to price.dev/app:api-batch (declared port held)",
+    "pid": 6010,
+    "ports": [
+     {
+      "port": 7073,
+      "state": "notListening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath"
+    ],
+    "startedAt": "2026-11-04T14:54:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:ingress",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.Price.Ingress.Functions'; no ports declared",
+    "ports": [],
+    "console": "idle"
+   }
+  ]
+ },
+ "ambiguous": {
+  "t": "hb",
+  "agentId": "simulated-agent",
+  "sessionId": "detect-only",
+  "hbSeq": 1,
+  "ts": "2026-11-04T15:00:00.000Z",
+  "apps": [
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:api",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.CustomerProject.Api'; port 5011 not listening",
+    "ports": [
+     {
+      "port": 5011,
+      "state": "notListening"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:functions",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.CustomerProject.Functions'; port 7239 not listening",
+    "ports": [
+     {
+      "port": 7239,
+      "state": "notListening"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:ingress",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.CustomerProject.Ingress.Functions'; port 7240 not listening",
+    "ports": [
+     {
+      "port": 7240,
+      "state": "notListening"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api",
+    "state": "stopped",
+    "reason": "'Dahl.Price.Api' only matched processes that went to price.dev/app:api-batch+price.dev/app:functions (tier exact > substring); port 52160,52161 not listening",
+    "ports": [
+     {
+      "port": 52160,
+      "state": "notListening"
+     },
+     {
+      "port": 52161,
+      "state": "notListening"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api-batch",
+    "state": "ambiguous",
+    "ambiguousInstances": 1,
+    "rootPid": 7000,
+    "ambiguousWith": [
+     "price.dev/app:functions"
+    ],
+    "listeningPorts": [
+     7073,
+     52171
+    ],
+    "reason": "pid 7000:dotnet matches 'Dahl.Price.Api.Batch' (root 7000:dotnet); no clean instance; matches price.dev/app:functions equally (§2.5 step 5)",
+    "pid": 7000,
+    "ports": [
+     {
+      "port": 52170,
+      "state": "notListening"
+     },
+     {
+      "port": 52171,
+      "state": "listening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "port"
+    ],
+    "startedAt": "2026-11-04T14:45:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:functions",
+    "state": "ambiguous",
+    "ambiguousInstances": 1,
+    "rootPid": 7000,
+    "ambiguousWith": [
+     "price.dev/app:api-batch"
+    ],
+    "listeningPorts": [
+     7073,
+     52171
+    ],
+    "reason": "pid 7000:dotnet matches 'Dahl.Price.Functions' (root 7000:dotnet); no clean instance; matches price.dev/app:api-batch equally (§2.5 step 5); port 7073 held by pid 7020 (func, instance of price.dev/app:api-batch)",
+    "pid": 7020,
+    "ports": [
+     {
+      "port": 7073,
+      "state": "listening"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "port"
+    ],
+    "startedAt": "2026-11-04T14:45:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:ingress",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.Price.Ingress.Functions'; no ports declared",
+    "ports": [],
+    "console": "idle"
+   }
+  ]
+ },
+ "portsFailed": {
+  "t": "hb",
+  "agentId": "simulated-agent",
+  "sessionId": "detect-only",
+  "hbSeq": 1,
+  "ts": "2026-11-04T15:00:00.000Z",
+  "apps": [
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:api",
+    "state": "running",
+    "rootPid": 1010,
+    "reason": "pid 1010:dahl.customerproject.api matches 'Dahl.CustomerProject.Api' (root 1010:dahl.customerproject.api); ports unknown (GetExtendedTcpTable failed: 87 (simulated)); command-line match only (§2.8)",
+    "pid": 1010,
+    "ports": [
+     {
+      "port": 5011,
+      "state": "unknown"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath"
+    ],
+    "startedAt": "2026-11-04T14:50:20.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:functions",
+    "state": "running",
+    "rootPid": 2000,
+    "reason": "pid 2010:dotnet matches 'Dahl.CustomerProject.Functions' (root 2000:func); ports unknown (GetExtendedTcpTable failed: 87 (simulated)); command-line match only (§2.8)",
+    "pid": 2010,
+    "ports": [
+     {
+      "port": 7239,
+      "state": "unknown"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine"
+    ],
+    "startedAt": "2026-11-04T14:40:05.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:ingress",
+    "state": "running",
+    "rootPid": 3000,
+    "reason": "pid 3000:func matches 'Dahl.CustomerProject.Ingress.Functions' (root 3000:func); ports unknown (GetExtendedTcpTable failed: 87 (simulated)); command-line match only (§2.8)",
+    "pid": 3000,
+    "ports": [
+     {
+      "port": 7240,
+      "state": "unknown"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine"
+    ],
+    "startedAt": "2026-11-04T09:00:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api",
+    "state": "stopped",
+    "reason": "'Dahl.Price.Api' only matched processes that went to price.dev/app:api-batch (tier exact > substring), price.dev/app:api-batch+price.dev/app:functions (tier exact > substring); ports unknown (GetExtendedTcpTable failed: 87 (simulated))",
+    "ports": [
+     {
+      "port": 52160,
+      "state": "unknown"
+     },
+     {
+      "port": 52161,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api-batch",
+    "state": "running",
+    "ambiguousInstances": 1,
+    "rootPid": 7010,
+    "ambiguousWith": [
+     "price.dev/app:functions"
+    ],
+    "reason": "pid 7010:dahl.price.api.batch matches 'Dahl.Price.Api.Batch' (root 7010:dahl.price.api.batch); ports unknown (GetExtendedTcpTable failed: 87 (simulated)); command-line match only (§2.8); 1 ambiguous instance(s) with price.dev/app:functions (root pid 7000); clean instance wins",
+    "pid": 7010,
+    "ports": [
+     {
+      "port": 52170,
+      "state": "unknown"
+     },
+     {
+      "port": 52171,
+      "state": "unknown"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath"
+    ],
+    "startedAt": "2026-11-04T14:45:10.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:functions",
+    "state": "running",
+    "ambiguousInstances": 1,
+    "rootPid": 6000,
+    "ambiguousWith": [
+     "price.dev/app:api-batch"
+    ],
+    "reason": "pid 6010:dahl.price.functions matches 'Dahl.Price.Functions' (root 6000:func); ports unknown (GetExtendedTcpTable failed: 87 (simulated)); command-line match only (§2.8); 1 ambiguous instance(s) with price.dev/app:api-batch (root pid 7000); clean instance wins",
+    "pid": 6010,
+    "ports": [
+     {
+      "port": 7073,
+      "state": "unknown"
+     }
+    ],
+    "matchedBy": [
+     "processName",
+     "commandLine",
+     "exePath"
+    ],
+    "startedAt": "2026-11-04T14:54:00.000Z",
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:ingress",
+    "state": "stopped",
+    "reason": "no process matches 'Dahl.Price.Ingress.Functions'; no ports declared",
+    "ports": [],
+    "console": "idle"
+   }
+  ],
+  "warnings": [
+   "PORT_TABLE_UNAVAILABLE"
+  ]
+ },
+ "wmiFailed": {
+  "t": "hb",
+  "agentId": "simulated-agent",
+  "sessionId": "detect-only",
+  "hbSeq": 1,
+  "ts": "2026-11-04T15:00:00.000Z",
+  "apps": [
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:api",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 5011,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:functions",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 7239,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "customerproject.dev",
+    "appId": "app:ingress",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 7240,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 52160,
+      "state": "unknown"
+     },
+     {
+      "port": 52161,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:api-batch",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 52170,
+      "state": "unknown"
+     },
+     {
+      "port": 52171,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:functions",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [
+     {
+      "port": 7073,
+      "state": "unknown"
+     }
+    ],
+    "console": "idle"
+   },
+   {
+    "regId": "price.dev",
+    "appId": "app:ingress",
+    "state": "unknown",
+    "reason": "process table unavailable: WMI query failed: ManagementException: Access denied (simulated)",
+    "ports": [],
+    "console": "idle"
+   }
+  ],
+  "warnings": [
+   "WMI_UNAVAILABLE"
+  ]
+ },
+ "hello": {
+  "t": "hello",
+  "agentId": "simulated-agent",
+  "agentVersion": "0.3.0",
+  "host": "grok-bot-vm-452660841",
+  "registrations": [
+   {
+    "id": "customerproject.dev",
+    "sha256": "5ccc19c9751934139e195b0c50121ce1b95af6fea5a3d934fc5de6308571f39a"
+   },
+   {
+    "id": "price.dev",
+    "sha256": "ec39d09048cdbbc9236c6ffeaa7ec4e3f1fd6536bf9ca9bac8785c3d2daa8046"
+   }
+  ]
+ }
+}

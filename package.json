@@ -10,13 +10,16 @@
     "build": "cd web && npm ci --include=dev && VITE_API_BASE=/api npm run build",
     "start": "node server/index.js",
     "sync-ui": "rm -rf web/src && cp -r ../dev-overview/ui/app/src web/src",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "sync-registrations": "rm -rf registrations && mkdir registrations && cp ../dev-overview/architecture/registrations/*.dev.json registrations/"
   },
   "dependencies": {
     "cookie-session": "^2.1.1",
     "express": "^4.21.2",
     "helmet": "^8.0.0",
     "http-proxy-middleware": "^3.0.3",
-    "openid-client": "^5.7.1"
+    "jose": "^6.2.15",
+    "openid-client": "^5.7.1",
+    "ws": "^8.22.1"
   }
 }

@@ -22,6 +22,10 @@ services:
         generateValue: true
       - key: ALLOWED_EMAILS
         value: bjor.byrkjedal@osilion.no
+      - key: AGENT_CLIENT_ID
+        sync: false # dsp-dev-overview-agent public client id
+      - key: ALLOWED_OIDS
+        sync: false # Bjor oid in Osilion tenant (comma-separated)
       - key: PUBLIC_BASE_URL
         sync: false # https://<service>.onrender.com
       - key: API_UPSTREAM

@@ -5,6 +5,11 @@ import { api } from "../api/client";
 import { useApi } from "../api/useApi";
 import { demoFlow } from "../mocks/demo";
 import { Count, Empty, ErrorBanner, noticeText, noticeTitle } from "../components/common";
+import { useDemo } from "../components/DemoContext";
+import { appAgentView, stateGlyph, STATE_GLYPH } from "../agent/derive";
+import { useAgentStatus, useNow } from "../agent/statusFeed";
+import { containerAppId } from "../agent/useProjectApps";
+import { CONTAINER_FONT, CONTAINER_SUB_FONT, NODE_FONT, fitSvgLabel, measureSvgText } from "./flow/labels";
 import SampleMessagePicker from "../components/SampleMessagePicker";
 import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
@@ -103,7 +108,12 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
             <div>{line(PALETTE.edge, "8 5")} cloud</div>
             <div>{line(PALETTE.back)} back-edge (upward)</div>
             <div><code>a 3 · DLQ 7</code> active · dead-letter</div>
+            <div><code>a — · DLQ —</code> count unknown (Service Bus did not answer)</div>
             <div><span style={{ color: PALETTE.attached }}>●</span> attached <span style={{ color: PALETTE.detached }}>○</span> not attached</div>
+            <div className="agent-states" title="App state reported by the local agent (container header)">
+              {Object.entries(STATE_GLYPH).map(([k, g]) => <span key={k}><span style={{ color: g.color }}>{g.glyph}</span> {k} </span>)}
+            </div>
+            <div><span className="state-unknown">?</span> state unknown (agent)</div>
             <div className="muted">drag node · drag box header moves its nodes · drag canvas pans · wheel zooms</div>
           </div>
         </div>
@@ -157,6 +167,10 @@ export default function FlowTab() {
   const scope = showCloud ? "all" : "local";
   const { data, error, loading, reload } = useApi(() => api.flow(projectId, scope), demoFlow, [projectId, scope]);
   const { counts, updatedAt, refresh } = useFlowCounts(projectId);
+  /** ADDENDA-010 §4: the local agent's app state, shown next to (never merged with) the API's attached flag. */
+  const { demoMode } = useDemo();
+  const agentFeed = useAgentStatus(!demoMode);
+  const agentNow = Math.max(useNow(5000), agentFeed.receivedAt);
   /** ADDENDA-009: the project notice comes from the summary ProjectDetailLayout already fetched (no extra endpoint). */
   const outlet = useOutletContext<ProjectOutletContext | undefined>();
   const notice = outlet?.project?.notice;
@@ -430,23 +444,51 @@ export default function FlowTab() {
     const b = geo.boxes[c.id];
     if (!b) return null;
     const isSel = selected === c.id;
+    const av = c.app ? appAgentView(agentFeed, projectId, containerAppId(c), agentNow) : null;
+    const ag = av?.kind === "reported" ? stateGlyph(av.app.state) : null;
+    // Room for the right-aligned "● attached" (+ agent state) text when the box is an app: measured, plus a gap.
+    const agentText = ag && av?.kind === "reported" ? `${ag.glyph} ${av.app.state}` : "";
+    const right = c.app
+      ? measureSvgText(c.app.attached ? "● attached" : "○ not attached", CONTAINER_SUB_FONT) + (agentText ? 8 + measureSvgText(agentText, CONTAINER_SUB_FONT) : 0) + 10
+      : 0;
+    const label = fitSvgLabel(c.label, b.w - 20 - right, CONTAINER_FONT);
+    // Narrow app box (label + attached + agent state don't fit): the header shows only the agent state icon and the
+    // full name, port, attached flag and agent state move to the tooltip.
+    const compact = !!c.app && label.truncated;
+    const attachedText = c.app?.attached ? "● attached" : "○ not attached";
+    const icon = ag ?? STATE_GLYPH.unknown;
+    const resources = `${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`;
     return (
       <g
         key={c.id}
-        className={`container-box ${c.kind} ${isSel ? "sel" : ""}`}
+        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${compact ? "compact" : ""}`}
         transform={`translate(${b.x},${b.y})`}
         onPointerDown={(e) => beginDrag(e, c.id, "container")}
+        {...(compact ? { "data-label": c.label, "aria-label": c.label } : {})}
       >
-        <title>{`${c.label} · ${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`}</title>
+        <title>
+          {compact
+            ? `${c.label}\nport: ${c.app?.port ?? "?"}\nconsole: ${attachedText}\nagent: ${agentText || "? not reported"}\n${resources}`
+            : `${c.label} · ${resources}`}
+        </title>
         {/* The body is pass-through (CSS pointer-events: none): only the header band grabs the pointer, so a box that
             overlaps another can never steal a drag aimed at the header underneath it (that is how a "Functions header"
             drag ended up moving the Ingress box). */}
         <rect className="box" width={b.w} height={b.h} rx={10} />
         <path className="hdr" d={headerPath(b.w)} />
-        <text x={10} y={HDR - 8} className="c1">{c.label}</text>
-        {c.app && (
+        {compact ? (
+          <text x={b.w - 10} y={HDR - 7} textAnchor="end" className="c2 compact">
+            <tspan className="agent-state" fill={icon.color} data-state={av?.kind === "reported" ? av.app.state : "not-reported"}>{icon.glyph}</tspan>
+          </text>
+        ) : (
+          <text x={10} y={HDR - 8} className="c1" {...(label.truncated ? { "aria-label": c.label, "data-full": c.label } : {})}>{label.text}</text>
+        )}
+        {c.app && !compact && (
           <text x={b.w - 10} y={HDR - 8} textAnchor="end" className="c2">
             {c.app.attached ? <tspan fill={PALETTE.attached}>● attached</tspan> : <tspan fill={PALETTE.detached}>○ not attached</tspan>}
+            {ag && av?.kind === "reported" && (
+              <tspan className="agent-state" fill={ag.color} data-state={av.app.state} dx={8}>{agentText}</tspan>
+            )}
           </text>
         )}
       </g>
@@ -464,6 +506,7 @@ export default function FlowTab() {
     const timers = n.kind === "handler" ? triggersOf(n, "timer") : [];
     const blobs = n.kind === "handler" ? triggersOf(n, "blob") : [];
     const style = missing ? PALETTE.missing : kindStyle(n.kind);
+    const label = fitSvgLabel(n.label, W - 16 - (rq.length > 0 ? 60 : 0), NODE_FONT);
     return (
       <g
         key={n.id}
@@ -492,8 +535,8 @@ export default function FlowTab() {
             strokeDasharray: style.dash,
           }}
         />
-        <text x={8} y={17} className="t1">
-          {n.label}
+        <text x={8} y={17} className="t1" {...(label.truncated ? { "aria-label": n.label, "data-full": n.label } : {})}>
+          {label.text}
         </text>
         <text x={8} y={33} className="t2">
           {nodeSubtitle(n, c)}
