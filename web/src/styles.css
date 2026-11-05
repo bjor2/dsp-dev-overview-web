@@ -132,7 +132,7 @@ tr.missing td { color: #64748b; }
 .console-toolbar .busy { font-size: 12px; color: #b45309; }
 .console-wrap { position: relative; }
 .console.agent { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.console.agent .line { white-space: pre-wrap; word-break: break-all; }
+.console.agent .line { white-space: pre-wrap; word-break: break-all; padding-left: 6px; }
 .console.agent .ts { color: #8b949e; margin-right: 10px; }
 .console.agent .src { color: #79c0ff; margin-right: 10px; display: inline-block; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
 .console.agent .flag { margin-left: 8px; padding: 0 5px; border: 1px solid #6e7681; border-radius: 8px; font-size: 10px; color: #c9d1d9; }
@@ -140,6 +140,46 @@ tr.missing td { color: #64748b; }
 .console.agent .line.system, .console.agent .line.system .txt { color: #80d8ff; }
 .console.agent .line.notice { color: #e3b341; font-style: italic; margin-bottom: 4px; }
 .console-paused { position: absolute; right: 22px; bottom: 14px; background: #2f80ed; color: #fff; border-color: #2f80ed; box-shadow: 0 2px 6px #0006; }
+/* Agent console polish: ANSI colours, level rows, folded stacks, run dividers, filters */
+.console.agent [hidden] { display: none !important; }
+.console.agent .line[data-level=error] { color: #ff7b72; background: #f8514914; box-shadow: inset 2px 0 #f85149; }
+.console.agent .line[data-level=warn] { color: #ffa657; background: #d2992212; box-shadow: inset 2px 0 #d29922; }
+.console.agent .line.frame { color: #8b949e; padding-left: calc(6px + 2ch); }
+.console.agent .line.frame[data-level=error] { color: #c98a85; background: #f8514908; }
+.console.agent .stack-toggle { display: block; margin: 0 0 1px 2ch; padding: 0 6px; border: 0; border-radius: 3px; background: transparent; color: #8b949e; font: inherit; cursor: pointer; text-align: left; }
+.console.agent .stack-toggle:hover, .console.agent .stack-toggle:focus-visible { background: #ffffff14; color: #c9d1d9; }
+.console.agent .stack-toggle[data-level=error] { color: #c98a85; }
+.console.agent .prev-run { opacity: 0.5; }
+.console.agent .run-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: #d2a8ff; font-weight: 600; }
+.console.agent .run-divider::after { content: ""; flex: 1; border-top: 1px dashed #d2a8ff55; }
+.console.agent .run-divider .why, .console.agent .run-divider .hidden-note { color: #8b949e; font-weight: 400; }
+.level-chips { display: inline-flex; }
+.level-chips .chip { border-radius: 0; margin-left: -1px; font-size: 12px; padding: 2px 9px; }
+.level-chips .chip:first-child { border-radius: 5px 0 0 5px; }
+.level-chips .chip:last-child { border-radius: 0 5px 5px 0; }
+.level-chips .chip.on { background: #eaf2ff; border-color: #2f80ed; color: #1d4ed8; position: relative; }
+.prev-runs-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #475569; cursor: pointer; white-space: nowrap; }
+.console.agent .ansi-bold { font-weight: 700; }
+.console.agent .ansi-dim { opacity: 0.65; }
+.console.agent .ansi-italic { font-style: italic; }
+.console.agent .ansi-underline { text-decoration: underline; }
+.console.agent .ansi-fg-30 { color: #6e7681; } .console.agent .ansi-fg-90 { color: #8b949e; }
+.console.agent .ansi-fg-31 { color: #ff7b72; } .console.agent .ansi-fg-91 { color: #ffa198; }
+.console.agent .ansi-fg-32 { color: #3fb950; } .console.agent .ansi-fg-92 { color: #56d364; }
+.console.agent .ansi-fg-33 { color: #d29922; } .console.agent .ansi-fg-93 { color: #e3b341; }
+.console.agent .ansi-fg-34 { color: #58a6ff; } .console.agent .ansi-fg-94 { color: #79c0ff; }
+.console.agent .ansi-fg-35 { color: #bc8cff; } .console.agent .ansi-fg-95 { color: #d2a8ff; }
+.console.agent .ansi-fg-36 { color: #39c5cf; } .console.agent .ansi-fg-96 { color: #56d4dd; }
+.console.agent .ansi-fg-37 { color: #c9d1d9; } .console.agent .ansi-fg-97 { color: #f0f6fc; }
+.console.agent .ansi-bg-40 { background: #161b22; } .console.agent .ansi-bg-100 { background: #30363d; }
+.console.agent .ansi-bg-41 { background: #da3633; color: #fff; } .console.agent .ansi-bg-101 { background: #f85149; color: #fff; }
+.console.agent .ansi-bg-42 { background: #238636; } .console.agent .ansi-bg-102 { background: #2ea043; }
+.console.agent .ansi-bg-43 { background: #9e6a03; } .console.agent .ansi-bg-103 { background: #bb8009; }
+.console.agent .ansi-bg-44 { background: #1f6feb; } .console.agent .ansi-bg-104 { background: #388bfd; }
+.console.agent .ansi-bg-45 { background: #8957e5; } .console.agent .ansi-bg-105 { background: #a371f7; }
+.console.agent .ansi-bg-46 { background: #1b7c83; } .console.agent .ansi-bg-106 { background: #2fb0bc; }
+.console.agent .ansi-bg-47 { background: #b1bac4; color: #111; } .console.agent .ansi-bg-107 { background: #f0f6fc; color: #111; }
+.console.agent .ansi-bg-41.ansi-fg-30, .console.agent .ansi-bg-101.ansi-fg-30 { color: #111; }
 
 /* Flow: agent state glyphs in the legend + container header */
 .legend-col .state-unknown { display: inline-block; width: 14px; text-align: center; font-weight: 700; color: #94a3b8; }
