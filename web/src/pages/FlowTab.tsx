@@ -204,16 +204,21 @@ export default function FlowTab() {
     moved.current = new Set();
     needFit.current = true;
     setSelection(EMPTY_SELECTION);
+    setSelected(null);
   }, [projectId]);
 
-  const clearSelection = useCallback(() => setSelection((s) => (s.size ? EMPTY_SELECTION : s)), []);
+  /** Clears multi-selection AND the single focus (outline + side panel). Used by Esc, empty-canvas click, Reset. */
+  const clearSelection = useCallback(() => {
+    setSelection((s) => (s.size ? EMPTY_SELECTION : s));
+    setSelected(null);
+  }, []);
   const toggleSelected = (id: string) =>
     setSelection((s) => {
       const next = new Set(s);
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // Esc clears the multi-selection.
+  // Esc clears multi-selection and focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") clearSelection(); };
     window.addEventListener("keydown", onKey);
@@ -370,7 +375,7 @@ export default function FlowTab() {
   };
 
   // Background pointerdown: shift → marquee select; otherwise pan (window listeners until pointerup, absolute delta
-  // from the start). A plain click (no movement) on the empty canvas clears the multi-selection.
+  // from the start). A plain click (no movement) on the empty canvas clears multi-selection and focus.
   const onBgPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || drag.current) return;
     if (e.shiftKey) return beginMarquee(e);
@@ -519,6 +524,7 @@ export default function FlowTab() {
     try {
       drag.current = null;
       setSelection(EMPTY_SELECTION);
+      setSelected(null);
       moved.current = new Set(); // cleared first so the unload safety net cannot re-write the dropped keys
       clearLocalPositions(posKey);
       await api.saveFlowPositions(projectId, {}).catch(() => { /* server store is optional now */ });
