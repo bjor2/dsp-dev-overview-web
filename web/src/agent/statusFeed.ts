@@ -3,7 +3,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { HTTP_PROBE_MS, backoff } from "./backoff";
 import { openSse } from "./sse";
-import { isAgentStatus, type AgentStatus, type UnavailableReason } from "./types";
+import { isAgentStatus, isConsoleLine, type AgentConsoleLine, type AgentStatus, type UnavailableReason } from "./types";
 
 export const AGENT_EVENTS_URL = "/agent/events";
 
@@ -18,6 +18,9 @@ export interface FeedSnapshot { link: AgentLink; status: AgentStatus | null; rec
 const IDLE: FeedSnapshot = { link: { kind: "idle" }, status: null, receivedAt: 0 };
 let snap: FeedSnapshot = IDLE;
 const listeners = new Set<() => void>();
+/** Line taps (Flow activity): fed from the same unfiltered stream, which carries every app's `lines` frames. */
+type LineTap = { filter: (raw: string) => boolean; fn: (lines: AgentConsoleLine[]) => void };
+const lineTaps = new Set<LineTap>();
 let subscribers = 0;
 let ctrl: AbortController | null = null;
 let retryTimer = 0;
@@ -49,6 +52,7 @@ function connect() {
       resetTimer = window.setTimeout(() => { attempt = 0; }, 10_000); // open for > 10 s → attempt counter reset
     },
     onEvent: (ev) => {
+      if (ev.event === "lines") return tapLines(ev.data);
       if (ev.event !== "status") return;
       let data: unknown;
       try { data = JSON.parse(ev.data); } catch { data = undefined; }
@@ -71,6 +75,19 @@ function connect() {
     set({ link: { kind: "reconnecting", attempt, retryAt: now + delay, lastError: close.kind === "network" ? close.message : "stream ended" } });
     retryTimer = window.setTimeout(connect, delay);
   });
+}
+
+/** Hand a `lines` frame to the taps whose cheap raw-text filter matches (no JSON.parse for frames nobody wants). */
+function tapLines(data: string) {
+  if (!lineTaps.size) return;
+  const taps = [...lineTaps].filter((t) => t.filter(data));
+  if (!taps.length) return;
+  let lines: AgentConsoleLine[];
+  try {
+    const d = JSON.parse(data) as { lines?: unknown[] };
+    lines = (d.lines ?? []).filter(isConsoleLine);
+  } catch { return; }
+  if (lines.length) for (const t of taps) t.fn(lines);
 }
 
 function onVisible() {
@@ -113,6 +130,19 @@ const getIdle = () => IDLE;
 export function useAgentStatus(enabled = true): FeedSnapshot {
   return useSyncExternalStore(enabled ? subscribe : noSubscribe, enabled ? getSnapshot : getIdle);
 }
+
+/**
+ * Tail every app's console lines off the shared feed without opening a per-app stream or keeping a ring. `filter`
+ * runs on the raw frame text first (e.g. `(s) => s.includes("Functions.")`). Live lines only: the unfiltered stream
+ * does not replay on reconnect, so a flaky link never re-fires old lines. Keeps the feed open while subscribed.
+ */
+export function subscribeAgentLines(filter: LineTap["filter"], fn: LineTap["fn"]): () => void {
+  const tap: LineTap = { filter, fn };
+  lineTaps.add(tap);
+  const unsub = subscribe(noop);
+  return () => { lineTaps.delete(tap); unsub(); };
+}
+const noop = () => {};
 
 // ---- shared tickers: one interval per period for every component that needs "now" -----------------------------
 const tickers = new Map<number, { now: number; listeners: Set<() => void>; timer: number }>();

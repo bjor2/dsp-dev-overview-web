@@ -200,3 +200,50 @@ tr.missing td { color: #64748b; }
 .container-box.selected path.hdr { fill: #2563eb33; }
 .marquee { fill: #2563eb14; stroke: #2563eb; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .selection-count { white-space: nowrap; }
+
+/* Flow live activity (DESIGN-flow-activity.md). The ring is an overlay rect outside the node box, so it never fights
+   the hot / selected / multi-selected stroke on the node's own rect. Scoped under svg.flow to beat `.node rect`. */
+svg.flow .node rect.activity-ring { fill: none; stroke: transparent; stroke-width: 3; pointer-events: none; transform-box: fill-box; transform-origin: center; }
+svg.flow .node.activity-pulse rect.activity-ring { stroke: #2563eb; animation: activity-pulse 1.4s ease-out; }
+svg.flow .node.activity-drain rect.activity-ring { stroke: #94a3b8; animation: activity-fade 0.9s ease-out; }
+svg.flow .node.activity-executing rect.activity-ring { stroke: #2563eb; stroke-dasharray: 6 4; animation: activity-march 0.6s linear infinite; }
+svg.flow .node.activity-succeeded rect.activity-ring { stroke: #16a34a; animation: activity-fade 1.1s ease-out forwards; }
+svg.flow .node.activity-dlq rect.activity-ring { stroke: #dc2626; stroke-width: 3.5; animation: activity-pulse 0.65s ease-out 4; }
+svg.flow .node.activity-failed rect.activity-ring { stroke: #dc2626; stroke-width: 3.5; stroke-dasharray: none; animation: activity-blink 0.5s ease-in-out 3; }
+svg.flow .node.activity-failed > rect:not(.activity-ring) { fill: #fee2e2 !important; }
+svg.flow .node.activity-dlq .dlq-count { fill: #dc2626; font-weight: 700; animation: activity-blink 0.65s ease-in-out 4; }
+svg.flow .node .activity-badge rect { fill: #2563eb; stroke: none; }
+svg.flow .node .activity-badge text { fill: #fff; font: 700 10px system-ui, sans-serif; pointer-events: none; }
+svg.flow .node .activity-badge.dlq rect, svg.flow .node .activity-badge.failed rect { fill: #dc2626; }
+svg.flow .node .activity-badge { pointer-events: none; animation: activity-badge-in 0.25s ease-out; }
+.edge.activity-edge { stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: 6 5; animation: activity-flow 0.5s linear infinite; }
+circle.activity-dot { fill: #2563eb; stroke: #fff; stroke-width: 1.5; pointer-events: none; filter: drop-shadow(0 0 2px #2563eb88); }
+@keyframes activity-pulse { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.12); } }
+@keyframes activity-fade { 0% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes activity-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes activity-march { to { stroke-dashoffset: -20; } }
+@keyframes activity-flow { to { stroke-dashoffset: -11; } }
+@keyframes activity-badge-in { from { opacity: 0; } } /* opacity only: a CSS transform would replace the <g transform> */
+/* Reduced motion: same states, held static (no scale, no blink, no marching); dots are not rendered at all. */
+@media (prefers-reduced-motion: reduce) {
+  svg.flow .node rect.activity-ring, svg.flow .node.activity-dlq .dlq-count, .edge.activity-edge, svg.flow .node .activity-badge { animation: none !important; }
+}
+.flow-activity-feed { position: absolute; right: 10px; top: 10px; width: 300px; max-height: 45%; overflow: auto; background: #ffffffee; border: 1px solid #dde3ea; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #334155; box-shadow: 0 1px 3px #0001; }
+.flow-activity-feed.collapsed { width: auto; }
+.flow-activity-feed .feed-head { display: flex; align-items: center; justify-content: space-between; }
+.flow-activity-feed .feed-clear { padding: 0 4px; font-size: 10.5px; }
+.flow-activity-feed ol { list-style: none; margin: 2px 0 2px; padding: 0; }
+.flow-activity-feed li { display: flex; gap: 6px; align-items: baseline; line-height: 17px; border-left: 3px solid #cbd5e1; padding-left: 5px; margin: 1px 0; }
+.flow-activity-feed li a { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.flow-activity-feed li a:hover { text-decoration: underline; }
+.flow-activity-feed time { color: #94a3b8; font-variant-numeric: tabular-nums; }
+.flow-activity-feed .feed-count { color: #64748b; font-weight: 600; }
+.flow-activity-feed .feed-item.pulse { border-left-color: #2563eb; }
+.flow-activity-feed .feed-item.succeeded { border-left-color: #16a34a; }
+.flow-activity-feed .feed-item.failed, .flow-activity-feed .feed-item.dlq { border-left-color: #dc2626; color: #991b1b; }
+.flow-activity-feed .feed-empty { padding: 2px 0 4px; }
+.legend-activity { display: inline-block; width: 12px; height: 8px; border-radius: 2px; border: 2px solid #2563eb; }
+.legend-activity.dlq, .legend-activity.failed { border-color: #dc2626; }
+.legend-activity.failed { background: #fee2e2; }
+.legend-activity.succeeded { border-color: #16a34a; }
+.legend-activity.executing { border-style: dashed; }

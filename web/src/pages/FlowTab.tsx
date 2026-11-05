@@ -11,10 +11,12 @@ import { useAgentStatus, useNow } from "../agent/statusFeed";
 import { containerAppId } from "../agent/useProjectApps";
 import { CONTAINER_FONT, CONTAINER_SUB_FONT, NODE_FONT, fitSvgLabel, measureSvgText } from "./flow/labels";
 import SampleMessagePicker from "../components/SampleMessagePicker";
-import { countsLabel, nodeCounts, useFlowCounts } from "../flow/useFlowCounts";
+import { nodeCounts, useFlowCounts, type FlowNodeCounts } from "../flow/useFlowCounts";
+import { edgeKey, type FeedItem } from "./flow/activity";
+import { useFlowActivity, usePrefersReducedMotion } from "./flow/useFlowActivity";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
 import { clearLocalPositions, loadLocalPositions, mergeLocalPositions, storageKey } from "./flow/localPositions";
-import type { FlowEdge, HandlerTrigger } from "../api/types";
+import type { FlowEdge, FlowNode, HandlerTrigger } from "../api/types";
 import type { ProjectOutletContext } from "./ProjectDetailLayout";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
@@ -22,6 +24,8 @@ import {
 } from "./flow/layout";
 
 const ZMIN = 0.2, ZMAX = 3;
+/** `.activity-badge text` (styles.css). */
+const BADGE_FONT = { font: "700 10px system-ui, sans-serif", letterSpacing: 0 };
 
 /** Single palette for canvas + legend. */
 const PALETTE = {
@@ -109,6 +113,8 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
             <div>{line(PALETTE.back)} back-edge (upward)</div>
             <div><code>a 3 · DLQ 7</code> active · dead-letter</div>
             <div><code>a — · DLQ —</code> count unknown (Service Bus did not answer)</div>
+            <div><span className="legend-activity pulse" /> message landed · <span className="legend-activity dlq" /> DLQ grew</div>
+            <div><span className="legend-activity executing" /> executing · <span className="legend-activity succeeded" /> ok · <span className="legend-activity failed" /> failed</div>
             <div><span style={{ color: PALETTE.attached }}>●</span> attached <span style={{ color: PALETTE.detached }}>○</span> not attached</div>
             <div className="agent-states" title="App state reported by the local agent (container header)">
               {Object.entries(STATE_GLYPH).map(([k, g]) => <span key={k}><span style={{ color: g.color }}>{g.glyph}</span> {k} </span>)}
@@ -122,6 +128,43 @@ function FlowLegend({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) 
     </div>
   );
 }
+
+const FEED_KEY = "flow.activity.collapsed";
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+/** Last ~20 activity events (newest first); a row selects its node. Overlays the canvas top-right. */
+function ActivityFeed({ feed, onPick, onClear, live }: { feed: readonly FeedItem[]; onPick: (nodeId: string) => void; onClear: () => void; live: string }) {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(FEED_KEY) === "1");
+  const toggle = () => setCollapsed((c) => { localStorage.setItem(FEED_KEY, c ? "0" : "1"); return !c; });
+  return (
+    <div className={`flow-activity-feed${collapsed ? " collapsed" : ""}`} onPointerDown={(e) => e.stopPropagation()} aria-live="polite">
+      <div className="feed-head">
+        <button type="button" className="ghost legend-toggle" onClick={toggle} aria-expanded={!collapsed}>
+          {collapsed ? "▸" : "▾"} Activity{feed.length ? ` (${feed.length})` : ""}
+        </button>
+        {!collapsed && feed.length > 0 && <button type="button" className="ghost feed-clear" onClick={onClear} title="Clear the feed">clear</button>}
+      </div>
+      {!collapsed && (feed.length === 0 ? (
+        <div className="muted feed-empty">Waiting for messages… ({live})</div>
+      ) : (
+        <ol>
+          {feed.map((i) => (
+            <li key={i.id} className={`feed-item ${i.kind}`} data-node={i.nodeId}>
+              <time>{clock(i.at)}</time>
+              <a href="#" title={`Select ${i.nodeId}`} onClick={(e) => { e.preventDefault(); onPick(i.nodeId); }}>{i.text}</a>
+              {i.count > 1 && <span className="feed-count">×{i.count}</span>}
+            </li>
+          ))}
+        </ol>
+      ))}
+    </div>
+  );
+}
+
+/** SMIL ignores begin="0s" on elements inserted after load (it is relative to the document start): start it now. */
+const beginNow = (el: SVGAnimationElement | null) => { try { el?.beginElement(); } catch { /* jsdom / no SMIL */ } };
+const NO_NODES: FlowNode[] = [];
+const NO_CONTAINERS: FlowContainer[] = [];
 
 type View = { x: number; y: number; k: number };
 /**
@@ -248,6 +291,11 @@ export default function FlowTab() {
     });
   }, [visibleEdges]);
   const geo = useMemo(() => (graph ? deriveGeometry(graph, pos) : EMPTY_GEOMETRY), [graph, pos]);
+  /** Live message activity: count deltas + Functions host lines → node rings, edge dots, the feed. */
+  const activity = useFlowActivity({
+    projectId, nodes: graph?.nodes ?? NO_NODES, containers: graph?.containers ?? NO_CONTAINERS, edges: visibleEdges, counts, agentLines: !demoMode,
+  });
+  const reducedMotion = usePrefersReducedMotion();
 
   const fitView = useCallback((rects: Rect[]) => {
     const svg = svgRef.current;
@@ -556,8 +604,10 @@ export default function FlowTab() {
     if (n.kind === "handler") return handlerFunction(n) ?? (n.handler?.triggerEntityIds?.length ? "trigger: " + n.handler.triggerEntityIds.join(", ") : "handler");
     if (n.kind === "blobContainer") return "storage · blob container";
     if (isMissing(n)) return c ? `a — · DLQ — · not on namespace` : "not on namespace";
-    return c ? countsLabel(c) : n.kind;
+    return c ? countsText(c) : n.kind;
   };
+  /** Same text as countsLabel ("a 3 · DLQ 7"), with the DLQ part in its own tspan so `activity-dlq` can flash it. */
+  const countsText = (c: FlowNodeCounts) => <>a {c.active ?? "—"} · <tspan className="dlq-count">DLQ {c.dlq ?? "—"}</tspan></>;
 
   const renderContainer = (c: FlowContainer) => {
     const b = geo.boxes[c.id];
@@ -629,12 +679,18 @@ export default function FlowTab() {
     const blobs = n.kind === "handler" ? triggersOf(n, "blob") : [];
     const style = missing ? PALETTE.missing : kindStyle(n.kind);
     const label = fitSvgLabel(n.label, W - 16 - (rq.length > 0 ? 60 : 0), NODE_FONT);
+    const act = activity.nodeClasses.get(n.id);
+    const actText = activity.nodeTitles.get(n.id);
+    const badge = activity.nodeBadges.get(n.id);
+    const rx = n.kind === "app" || n.kind === "handler" ? 8 : 3;
     return (
       <g
         key={n.id}
         transform={`translate(${p.x},${p.y})`}
-        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}`}
+        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}${act ? " " + act : ""}`}
+        data-id={n.id}
         data-selected={inSel ? "true" : undefined}
+        data-activity={actText}
         onPointerDown={(e) => beginDrag(e, n.id)}
         style={{ cursor: "grab" }}
       >
@@ -646,11 +702,13 @@ export default function FlowTab() {
               : n.sb?.maxDeliveryCount != null
                 ? `${n.label} · MaxDeliveryCount ${n.sb.maxDeliveryCount}${hot ? " · DLQ hot" : ""} · drag to move`
                 : `${n.label}${n.containerId ? " · in " + containerLabel(n.containerId) : ""} · drag to move`}
+          {actText ? `\n⚡ ${actText}` : ""}
         </title>
+        {act && <rect key={act + actText} className="activity-ring" x={-4} y={-4} width={W + 8} height={H + 8} rx={rx + 4} />}
         <rect
           width={W}
           height={H}
-          rx={n.kind === "app" || n.kind === "handler" ? 8 : 3}
+          rx={rx}
           style={{
             fill: style.fill,
             // Multi-selected: stroke + glow come from `g.node.selected > rect` in styles.css (inline would win).
@@ -664,6 +722,17 @@ export default function FlowTab() {
         <text x={8} y={33} className="t2">
           {nodeSubtitle(n, c)}
         </text>
+        {/* Activity chip straddles the bottom-right border: the top edge belongs to the requeue / trigger badges, and
+            anything beside the box would sit under the next node (drawn later). */}
+        {badge && (() => {
+          const bw = Math.ceil(measureSvgText(badge.text, BADGE_FONT)) + 14;
+          return (
+            <g className={`activity-badge ${badge.kind}`} transform={`translate(${W - bw - 4},${H - 8})`}>
+              <rect width={bw} height={16} rx={8} />
+              <text x={bw / 2} y={11.5} textAnchor="middle">{badge.text}</text>
+            </g>
+          );
+        })()}
         {rq.length > 0 && (
           <g className="requeue-badge" transform={`translate(${W - 66},-9)`}>
             <title>{requeueTooltip(n)}</title>
@@ -784,7 +853,8 @@ export default function FlowTab() {
               const d = edgePath(a, b);
               const back = layers[e.to] !== undefined && layers[e.to] <= layers[e.from];
               const fromBlob = kindOf.get(e.from) === "blobContainer";
-              const cls = `edge${back ? " back" : ""} ${e.kind} ${fromBlob ? "from-blobContainer" : ""} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}`;
+              const lit = activity.edgeDots.has(edgeKey(e));
+              const cls = `edge${back ? " back" : ""} ${e.kind} ${fromBlob ? "from-blobContainer" : ""} ${e.confidence === "inferred-from-settings" ? "inferred" : ""} ${e.scope === "cloud" ? "cloud" : ""}${lit ? " activity-edge" : ""}`;
               // Exactly one path per from→to and exactly one marker on it (markerEnd = the target node). No
               // markerStart, no hit-area twin: a second path would get its own arrowhead and read as double-headed.
               return (
@@ -793,11 +863,28 @@ export default function FlowTab() {
                 </path>
               );
             })}
+            {/* Travelling dots (one per lit edge, remounted per event so the motion restarts); none under reduced motion. */}
+            {!reducedMotion && drawnEdges.map((e) => {
+              const k = activity.edgeDots.get(edgeKey(e));
+              const a = geo.absPos[e.from], b = geo.absPos[e.to];
+              if (k === undefined || !a || !b) return null;
+              return (
+                <circle key={e.id + ":" + k} className="activity-dot" r={4.5} data-edge={edgeKey(e)}>
+                  <animateMotion ref={beginNow} dur="1.1s" begin="indefinite" fill="freeze" path={edgePath(a, b)} />
+                </circle>
+              );
+            })}
             {graph.nodes.map(renderNode)}
             {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
             </g>
           </svg>
           <FlowLegend rootRef={legendRef} />
+          <ActivityFeed
+            feed={activity.feed}
+            onPick={setSelected}
+            onClear={activity.clearFeed}
+            live={demoMode ? "demo data: counts only" : "counts every 2.5 s · Functions lines from the local agent"}
+          />
           </div>
           <aside className="side-panel">
             {!sel && !selContainer && <Empty>Select or drag a node or container.</Empty>}
