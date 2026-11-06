@@ -12,7 +12,7 @@ import { NODE_FONT, fitSvgLabel } from "../pages/flow/labels";
 import Breadcrumbs from "./Breadcrumbs";
 import CaveatPanel, { type ArchSelection } from "./CaveatPanel";
 import { FRAME_TAB, NH, NW, archEdgePath, layerBounds, layerFrame, layoutLayer, type Box, type XY } from "./layout";
-import { archPosKey, clearArchPositions, loadArchPositions, mergeArchPositions, type ArchPosMap } from "./localPositions";
+import { archPosKey, archPosRange, clampArchPos, clearArchPositions, loadArchPositions, mergeArchPositions, type ArchPosMap } from "./localPositions";
 import { ARCHITECTURE_INVALID, ARCHITECTURE_LAYER_NOT_FOUND, buildCrumbs, edgeLabel, parentLayerId, safeLayer, type Crumb } from "./model";
 
 export type LeaveFocus = { focus?: "origin" | string };
@@ -162,7 +162,12 @@ function ArchitectureCanvas({ projectId, layerId, loadLayer, onOpen, onLeave, ca
   const posKey = archPosKey(projectId, layerId);
   const known = useMemo<ReadonlySet<string>>(() => new Set(current?.layer.nodes.map((n) => n.id) ?? []), [current]);
   // Re-read on every (re-)entry: `current` is a fresh object per load. Stale ids / bad coordinates are dropped here.
-  const stored = useMemo(() => (current ? loadArchPositions(posKey, known) : {}), [current, posKey, known, storeNonce]);
+  /** Safe drag/storage range: auto-layout AABB + ARCH_POS_MARGIN (see localPositions.ts). */
+  const posRange = useMemo(() => (auto ? archPosRange(auto.bounds) : null), [auto]);
+  const stored = useMemo(
+    () => (current && posRange ? loadArchPositions(posKey, known, posRange) : {}),
+    [current, posKey, known, storeNonce, posRange],
+  );
   /** Auto-layout, then saved positions, then this visit's drags. Absolute in the layer: frame and edges derive from it. */
   const layout = useMemo(() => {
     if (!current || !auto) return null;
@@ -287,7 +292,7 @@ function ArchitectureCanvas({ projectId, layerId, loadLayer, onOpen, onLeave, ca
    */
   const onNodePointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation(); // no background pan
-    if (e.button !== 0 || drag.current || !layout) return;
+    if (e.button !== 0 || drag.current || !layout || !posRange) return;
     suppressClick.current = false;
     const sx = e.clientX, sy = e.clientY;
     if (e.shiftKey) {
@@ -302,8 +307,9 @@ function ArchitectureCanvas({ projectId, layerId, loadLayer, onOpen, onLeave, ca
     drag.current = d;
     const el = e.currentTarget as Element;
     try { el.setPointerCapture?.(e.pointerId); } catch { /* unsupported */ }
+    const range = posRange!;
     const targets = (ev: PointerEvent): ArchPosMap =>
-      Object.fromEntries(Object.entries(d.origin).map(([i, p]) => [i, { x: p.x + (ev.clientX - d.sx) / d.k, y: p.y + (ev.clientY - d.sy) / d.k }]));
+      Object.fromEntries(Object.entries(d.origin).map(([i, p]) => [i, clampArchPos({ x: p.x + (ev.clientX - d.sx) / d.k, y: p.y + (ev.clientY - d.sy) / d.k }, range)]));
     const apply = (p: ArchPosMap) => setMoved((m) => ({ key: d.key, pos: { ...(m.key === d.key ? m.pos : {}), ...p } }));
     trackPointer(
       e.pointerId,
@@ -322,7 +328,7 @@ function ArchitectureCanvas({ projectId, layerId, loadLayer, onOpen, onLeave, ca
         setTimeout(() => { suppressClick.current = false; }, 0);
         if (ev.type === "pointerup") d.last = targets(ev);
         apply(d.last);
-        mergeArchPositions(d.key, d.last, d.known);
+        mergeArchPositions(d.key, d.last, d.known, range);
         setSelection({ kind: "node", id });
       },
     );
