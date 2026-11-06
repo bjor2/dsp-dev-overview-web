@@ -26,7 +26,7 @@ export interface FlowContainer {
   positionSource?: "default" | "stored";
   /** Hint only; the UI recomputes from children + padding. Never sent by the API. */
   size?: { w: number; h: number };
-  /** ADDENDA-011: root architecture layer for this container. Absent when there is no valid layer. */
+  /** @deprecated ADDENDA-011.1: containers never carry opensLayerId; ignored if present. */
   opensLayerId?: string;
 }
 /** OQ-1: self-requeue is a badge on the handler, not an edge. */
@@ -44,7 +44,7 @@ export interface HandlerInfo {
   selfRequeue: SelfRequeue[];
   /** ADDENDA-009: every handler; timer-only handlers have no inbound edge and empty triggerEntityIds. */
   triggers?: HandlerTrigger[];
-  /** ADDENDA-011: handler-rooted architecture layer (read when present; no handler affordance in the first slice). */
+  /** ADDENDA-011.1: handler-rooted architecture layer; Explore affordance when present. */
   opensLayerId?: string;
 }
 export interface FlowNode {
@@ -160,6 +160,7 @@ export interface ArchEdge {
   label: string; description: string;
   sources: ArchSource[]; uncertainties: string[];
 }
+/** ADDENDA-011.1: roots require handlerId (must belong to containerId). */
 export interface ArchFlowRef { containerId: string; handlerId?: string }
 export interface ArchLayer {
   schemaVersion: 1; documentType: "architecture-layer";
