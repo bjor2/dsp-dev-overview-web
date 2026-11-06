@@ -930,6 +930,7 @@ export default function FlowTab() {
       {loading && <Empty>Loading flow…</Empty>}
       {graph && arch && (
         <ArchitectureView
+          projectId={projectId}
           layerId={arch.layerId}
           loadLayer={architecture.loadLayer}
           onOpen={openLayer}

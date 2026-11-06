@@ -278,7 +278,7 @@ svg.flow .container-box.has-architecture:focus-visible rect.box { stroke: #2563e
 svg.architecture { width: 100%; height: 100%; background: #fbfcfe; border: 1px solid #c7d2fe; border-radius: 6px; touch-action: none; user-select: none; cursor: default; display: block; }
 svg.architecture .arch-boundary { fill: #1e3a8a0f; stroke: #1e3a8a; stroke-width: 2; pointer-events: none; }
 svg.architecture .arch-boundary-title { fill: #1e3a8a; font: 700 12px system-ui, sans-serif; }
-svg.architecture .arch-node { cursor: default; }
+svg.architecture .arch-node { cursor: grab; }
 svg.architecture .arch-node.arch-opener { cursor: pointer; }
 svg.architecture .arch-node { outline: none; }
 svg.architecture .arch-node .arch-shape { fill: #ffffff; stroke: #1e3a8a; stroke-width: 1.4; }
@@ -289,6 +289,10 @@ svg.architecture .arch-node .arch-cue { fill: none; stroke: #94a3b8; stroke-widt
 svg.architecture .arch-node.arch-kind-contract .arch-cue { stroke: #a16207; }
 svg.architecture .arch-node.arch-selected .arch-shape { stroke: #2563eb; stroke-width: 2.5; }
 svg.architecture .arch-node:focus-visible .arch-shape { stroke: #2563eb; stroke-width: 2.5; }
+/* Multi-selection (shift+click / shift+drag marquee): accent stroke + glow, distinct from the single focus outline.
+   The marquee rect itself uses the shared .marquee rule. */
+svg.architecture .arch-node.arch-multi .arch-shape { stroke: #2563eb; stroke-width: 3; filter: drop-shadow(0 0 4px #2563eb99); }
+svg.architecture .arch-node.arch-multi.arch-selected .arch-shape { stroke: #1d4ed8; stroke-width: 3.5; }
 svg.architecture .arch-t1 { fill: #0f172a; font: 600 12px system-ui, sans-serif; pointer-events: none; }
 svg.architecture .arch-t2 { fill: #475569; font-size: 10.5px; pointer-events: none; }
 svg.architecture .arch-explore-chip rect { fill: #1e3a8a; stroke: none; }

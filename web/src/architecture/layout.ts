@@ -1,4 +1,6 @@
-// ADDENDA-011 §3.7: deterministic auto-layout for one architecture layer. Pure; nothing is persisted (no apos:*).
+// ADDENDA-011 §3.7: deterministic auto-layout for one architecture layer. Pure; persists nothing. The user's own
+// positions (localPositions.ts, dsp-arch-pos:v1:…) are overlaid on `pos` by the view, which then re-derives the frame
+// and bounds from the merged map with layerFrame / layerBounds.
 import type { ArchEdge, ArchNode } from "../api/types";
 
 export type XY = { x: number; y: number };
@@ -70,19 +72,29 @@ export function layoutLayer(nodes: readonly ArchNode[], edges: readonly ArchEdge
     const off = ((bandRows - list.length) * rowH) / 2;
     list.forEach((n, i) => { pos[n.id] = { x: colX(c), y: off + i * rowH }; });
   }
-  let frame: Box | null = null;
-  if (inside.length) {
-    const xs = inside.map((n) => pos[n.id].x), ys = inside.map((n) => pos[n.id].y);
-    const x0 = Math.min(...xs) - FRAME_PAD, y0 = Math.min(...ys) - FRAME_PAD - FRAME_TAB;
-    frame = { x: x0, y: y0, w: Math.max(...xs) + NW + FRAME_PAD - x0, h: Math.max(...ys) + NH + FRAME_PAD - y0 };
-  }
+  const frame = layerFrame(inside, pos);
   const top = frame ? frame.y : 0, bottom = frame ? frame.y + frame.h : bandRows * rowH;
   for (const [c, list] of above) list.forEach((n, i) => { pos[n.id] = { x: colX(c), y: top - LANE_GAP - (list.length - i) * rowH + GY }; });
   for (const [c, list] of below) list.forEach((n, i) => { pos[n.id] = { x: colX(c), y: bottom + LANE_GAP + i * rowH }; });
+  return { pos, frame, bounds: layerBounds(pos, frame) };
+}
+
+/** Boundary frame around the inside nodes at their current positions; null when the layer has none placed. */
+export function layerFrame(nodes: readonly ArchNode[], pos: Readonly<Record<string, XY>>): Box | null {
+  const ps = nodes.filter((n) => n.boundary === "inside" && pos[n.id]).map((n) => pos[n.id]);
+  if (!ps.length) return null;
+  const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+  const x0 = Math.min(...xs) - FRAME_PAD, y0 = Math.min(...ys) - FRAME_PAD - FRAME_TAB;
+  return { x: x0, y: y0, w: Math.max(...xs) + NW + FRAME_PAD - x0, h: Math.max(...ys) + NH + FRAME_PAD - y0 };
+}
+
+/** Box around every node and the frame (what Fit frames). */
+export function layerBounds(pos: Readonly<Record<string, XY>>, frame: Box | null): Box {
   const rects: Box[] = [...Object.values(pos).map((p) => ({ x: p.x, y: p.y, w: NW, h: NH })), ...(frame ? [frame] : [])];
+  if (!rects.length) return { x: 0, y: 0, w: NW, h: NH };
   const minX = Math.min(...rects.map((r) => r.x)), minY = Math.min(...rects.map((r) => r.y));
   const maxX = Math.max(...rects.map((r) => r.x + r.w)), maxY = Math.max(...rects.map((r) => r.y + r.h));
-  return { pos, frame, bounds: { x: minX, y: minY, w: maxX - minX, h: maxY - minY } };
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
 type Side = { x: number; y: number; nx: number; ny: number };
