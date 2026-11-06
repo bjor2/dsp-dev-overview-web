@@ -16,7 +16,10 @@ import { edgeKey, type FeedItem } from "./flow/activity";
 import { useFlowActivity, usePrefersReducedMotion } from "./flow/useFlowActivity";
 import { handlerFunction, normalizeGraph, selfRequeue } from "./flow/model";
 import { clearLocalPositions, loadLocalPositions, mergeLocalPositions, storageKey } from "./flow/localPositions";
-import type { FlowEdge, FlowNode, HandlerTrigger } from "../api/types";
+import type { ArchFlowRef, FlowEdge, FlowNode, HandlerTrigger } from "../api/types";
+import ArchitectureView, { type ArchViewState, type LeaveFocus } from "../architecture/ArchitectureView";
+import { setArchFixtures, useArchitecture } from "../architecture/useArchitecture";
+import { ARCHITECTURE_INVALID } from "../architecture/model";
 import type { ProjectOutletContext } from "./ProjectDetailLayout";
 import type { FlowContainer, PosMap, Rect, V2Node, XY } from "./flow/model";
 import {
@@ -26,6 +29,9 @@ import {
 const ZMIN = 0.2, ZMAX = 3;
 /** `.activity-badge text` (styles.css). */
 const BADGE_FONT = { font: "700 10px system-ui, sans-serif", letterSpacing: 0 };
+/** `.explore-pill text` (styles.css). */
+const PILL_FONT = { font: "600 10px system-ui, sans-serif", letterSpacing: 0 };
+const EXPLORE_TIP = "Explore architecture: responsibilities and data paths inside this container (static, not live)";
 
 /** Single palette for canvas + legend. */
 const PALETTE = {
@@ -198,6 +204,8 @@ const CLICK_SLOP = 3;
 const isClick = (sx: number, sy: number, ev: PointerEvent) => Math.hypot(ev.clientX - sx, ev.clientY - sy) < CLICK_SLOP;
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+const isTypingTarget = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
 const edgeTooltip = (e: FlowEdge) =>
   `${e.kind}: ${e.from} → ${e.to}${e.label ? " (" + e.label + ")" : ""} [${e.confidence}]` +
   (e.sources?.length ? "\n" + e.sources.map((s) => "  " + s).join("\n") : "");
@@ -224,6 +232,11 @@ export default function FlowTab() {
   const [confirmReset, setConfirmReset] = useState(false);
   const drag = useRef<Drag | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  /** ADDENDA-011 architecture mode. Flow stays mounted (hidden) so view / pos / selection / activity keep their state. */
+  const [arch, setArch] = useState<{ layerId: string } | null>(null);
+  const archRef = useRef(arch);
+  archRef.current = arch;
+  const archViewState = useRef<ArchViewState | null>(null);
   const legendRef = useRef<HTMLDivElement | null>(null);
   const scope = showCloud ? "all" : "local";
   const { data, error, loading, reload } = useApi(() => api.flow(projectId, scope), demoFlow, [projectId, scope]);
@@ -263,12 +276,54 @@ export default function FlowTab() {
     });
   // Esc clears multi-selection and focus.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") clearSelection(); };
+    // Skipped in architecture mode: there Esc clears the architecture selection only.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !archRef.current) clearSelection(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [clearSelection]);
 
   const graph = useMemo(() => (data ? normalizeGraph(data) : null), [data]);
+  /** ADDENDA-011: root layer per container (Flow DTO opensLayerId, or the DEV fixture seam). Never changes `graph`. */
+  const architecture = useArchitecture(projectId, graph?.containers, graph?.warnings, demoMode);
+  useEffect(() => { setArch(null); }, [projectId]);
+  const openLayer = useCallback((layerId: string) => setArch({ layerId }), []);
+  /**
+   * Back to Flow: arch = null and nothing else (no fitView, no view change, selection kept). Only an explicit
+   * "View in Flow" (focus: origin) or a node's "⇱ Flow" (focus: entity id) selects something, and only when it is
+   * in the current graph.
+   */
+  const { clearCache: clearArchCache } = architecture;
+  const leaveArchitecture = useCallback((opts?: LeaveFocus & { rootFlowRef?: ArchFlowRef }) => {
+    setArch(null);
+    clearArchCache();
+    const ref = opts?.rootFlowRef ?? archViewState.current?.rootFlowRef ?? undefined;
+    const id = opts?.focus === "origin" ? (ref?.handlerId ?? ref?.containerId) : opts?.focus;
+    if (id && graph && (graph.containers.some((c) => c.id === id) || graph.nodes.some((n) => n.id === id))) setSelected(id);
+  }, [clearArchCache, graph]);
+  const inGraph = useCallback(
+    (id: string) => !!graph && (graph.containers.some((c) => c.id === id) || graph.nodes.some((n) => n.id === id)),
+    [graph],
+  );
+  const onArchState = useCallback((st: ArchViewState) => { archViewState.current = st; }, []);
+  // DEV only (compiled out of builds): Playwright hooks for the fixture seam.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as unknown as { __archTest?: unknown };
+    w.__archTest = {
+      enable: () => setArchFixtures(true),
+      disable: () => setArchFixtures(false),
+      open: (layerId: string) => openLayer(layerId),
+      state: () => ({
+        mode: archRef.current ? "architecture" : "flow",
+        layerId: archRef.current?.layerId ?? null,
+        breadcrumbs: archRef.current ? (archViewState.current?.breadcrumbs ?? []) : [],
+        rootFlowRef: archRef.current ? (archViewState.current?.rootFlowRef ?? null) : null,
+        source: architecture.source,
+        roots: Object.fromEntries(architecture.roots),
+      }),
+    };
+    return () => { delete w.__archTest; };
+  }, [openLayer, architecture.source, architecture.roots]);
   /** localStorage key for this project + env (dsp-flow-pos:v2:{project}:{env}); the ref is for drag-end / unload writes. */
   const posKey = useMemo(() => storageKey(projectId, graph), [projectId, graph]);
   const posKeyRef = useRef(posKey);
@@ -618,9 +673,13 @@ export default function FlowTab() {
     const ag = av?.kind === "reported" ? stateGlyph(av.app.state) : null;
     // Room for the right-aligned "● attached" (+ agent state) text when the box is an app: measured, plus a gap.
     const agentText = ag && av?.kind === "reported" ? `${ag.glyph} ${av.app.state}` : "";
-    const right = c.app
-      ? measureSvgText(c.app.attached ? "● attached" : "○ not attached", CONTAINER_SUB_FONT) + (agentText ? 8 + measureSvgText(agentText, CONTAINER_SUB_FONT) : 0) + 10
+    const statusW = c.app
+      ? measureSvgText(c.app.attached ? "● attached" : "○ not attached", CONTAINER_SUB_FONT) + (agentText ? 8 + measureSvgText(agentText, CONTAINER_SUB_FONT) : 0)
       : 0;
+    // ADDENDA-011: "Explore →" pill before the status text, only when the container has a root layer.
+    const root = architecture.roots.get(c.id);
+    const pillW = root ? Math.ceil(measureSvgText("Explore →", PILL_FONT)) + 14 : 0;
+    const right = (c.app ? statusW + 10 : 0) + (root ? pillW + 8 : 0);
     const label = fitSvgLabel(c.label, b.w - 20 - right, CONTAINER_FONT);
     // Narrow app box (label + attached + agent state don't fit): the header shows only the agent state icon and the
     // full name, port, attached flag and agent state move to the tooltip.
@@ -628,14 +687,38 @@ export default function FlowTab() {
     const attachedText = c.app?.attached ? "● attached" : "○ not attached";
     const icon = ag ?? STATE_GLYPH.unknown;
     const resources = `${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`;
+    // Compact boxes show only "→" left of the state icon; otherwise the full pill left of "● attached …".
+    const pill = root
+      ? compact
+        ? { w: 22, x: b.w - 10 - 16 - 6 - 22, text: "→" }
+        : { w: pillW, x: b.w - 10 - (c.app ? statusW + 8 : 0) - pillW, text: "Explore →" }
+      : null;
+    /**
+     * Pill pointer rules: shift → let it bubble (the header's shift+click toggles the multi-selection); otherwise a
+     * button: no drag, no selection change, no position write; opens on a release within CLICK_SLOP.
+     */
+    const onPillDown = (e: React.PointerEvent) => {
+      if (e.shiftKey || e.button !== 0 || !root) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const sx = e.clientX, sy = e.clientY;
+      trackPointer(e.pointerId, null, (ev) => { if (ev.type === "pointerup" && isClick(sx, sy, ev)) openLayer(root.layerId); });
+    };
+    const onHeaderKey = (e: React.KeyboardEvent) => {
+      if (!root || isTypingTarget(e.target)) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLayer(root.layerId); }
+    };
     return (
       <g
         key={c.id}
-        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}`}
+        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}${root ? " has-architecture" : ""}`}
+        data-id={c.id}
         data-selected={inSel ? "true" : undefined}
+        data-opens-layer={root?.layerId}
         transform={`translate(${b.x},${b.y})`}
         onPointerDown={(e) => beginDrag(e, c.id)}
         {...(compact ? { "data-label": c.label, "aria-label": c.label } : {})}
+        {...(root ? { tabIndex: 0, role: "button", "aria-label": `Explore architecture of ${c.label}`, onKeyDown: onHeaderKey } : {})}
       >
         <title>
           {compact
@@ -661,6 +744,13 @@ export default function FlowTab() {
               <tspan className="agent-state" fill={ag.color} data-state={av.app.state} dx={8}>{agentText}</tspan>
             )}
           </text>
+        )}
+        {pill && root && (
+          <g className="explore-pill" transform={`translate(${pill.x},${(HDR - 16) / 2})`} onPointerDown={onPillDown} data-layer={root.layerId}>
+            <title>{`${EXPLORE_TIP}\n${root.title}`}</title>
+            <rect width={pill.w} height={16} rx={8} />
+            <text x={pill.w / 2} y={11.5} textAnchor="middle">{pill.text}</text>
+          </g>
         )}
       </g>
     );
@@ -762,7 +852,7 @@ export default function FlowTab() {
 
   return (
     <div className="flow-page">
-      <div className="toolbar">
+      {!arch && <div className="toolbar">
         <label>
           <input type="checkbox" checked={showCloud} onChange={(e) => setShowCloud(e.target.checked)} /> Show cloud edges
         </label>
@@ -801,28 +891,47 @@ export default function FlowTab() {
             Inject sample…
           </button>
         )}
-      </div>
+        {architecture.source === "fixtures" && (
+          <span className="muted arch-fixtures-note" title="Explore links come from the SPA's copy of architecture/layers (DEV fixture seam), not from the API">architecture: fixtures</span>
+        )}
+      </div>}
       {notice && (
         <div className={`notice flow-notice ${notice.severity === "warn" ? "warn" : "info"}`} role="note" title={noticeTitle(notice)} data-code={notice.code}>
           {noticeText(notice)}
         </div>
       )}
       {error && <ErrorBanner error={error} onRetry={reload} />}
-      {graph?.warnings && graph.warnings.length > 0 && (
+      {graph && ((graph.warnings?.length ?? 0) > 0 || architecture.invalid) && (
         <div className="warn-banner" role="status">
           <strong>Flow warnings</strong>
           <ul>
-            {graph.warnings.map((w, i) => (
+            {(graph.warnings ?? []).map((w, i) => (
               <li key={i}>
                 <code>{w}</code>
               </li>
             ))}
+            {architecture.invalid && !graph.warnings?.includes(ARCHITECTURE_INVALID) && (
+              <li className="arch-invalid-warning">
+                <code>{ARCHITECTURE_INVALID}</code> — architecture catalog rejected; Explore is unavailable, Flow is unaffected
+              </li>
+            )}
           </ul>
         </div>
       )}
       {loading && <Empty>Loading flow…</Empty>}
+      {graph && arch && (
+        <ArchitectureView
+          layerId={arch.layerId}
+          loadLayer={architecture.loadLayer}
+          onOpen={openLayer}
+          onLeave={leaveArchitecture}
+          canFocus={inGraph}
+          fixtures={architecture.source === "fixtures"}
+          onState={onArchState}
+        />
+      )}
       {graph && (
-        <div className="flow-wrap">
+        <div className="flow-wrap" hidden={!!arch}>
           <div className="flow-canvas">
           <svg
             ref={svgRef}
@@ -894,6 +1003,12 @@ export default function FlowTab() {
                 <div className="muted">
                   {selContainer.id} · {selContainer.kind} container{selContainer.scope ? ` · scope ${selContainer.scope}` : ""}
                 </div>
+                {architecture.roots.get(selContainer.id) && (
+                  <p className="explore-line">
+                    Architecture: {architecture.roots.get(selContainer.id)!.title} ·{" "}
+                    <a href="#" onClick={(e) => { e.preventDefault(); openLayer(architecture.roots.get(selContainer.id)!.layerId); }} title={EXPLORE_TIP}>Explore →</a>
+                  </p>
+                )}
                 <p>
                   Resources: {selContainer.resourceRefs.length ? selContainer.resourceRefs.map((r) => <code key={r}>{r} </code>) : <span className="muted">none</span>}
                 </p>

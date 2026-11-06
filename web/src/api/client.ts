@@ -1,5 +1,5 @@
 import type {
-  ApiErrorBody, DlqMessage, EntityStatus, FlowGraph, LogEvent, ProjectSummary, QueuePeek,
+  ApiErrorBody, ArchitectureIndex, ArchitectureLayerResponse, DlqMessage, EntityStatus, FlowGraph, LogEvent, ProjectSummary, QueuePeek,
   SampleMessageCatalog, SampleSendRequest, SampleSendResult,
 } from "./types";
 
@@ -38,7 +38,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     throw e;
   }
 }
-const isCold = (e: ApiError) => e.code !== "BOX_OFFLINE" && (e.code === "API_UPSTREAM_COLD" || e.status === 502 || e.status === 503 || e.status === 504);
+// ARCHITECTURE_INVALID (503) is a validation verdict, not a sleeping upstream: never retried.
+const isCold = (e: ApiError) => e.code !== "BOX_OFFLINE" && e.code !== "ARCHITECTURE_INVALID" && (e.code === "API_UPSTREAM_COLD" || e.status === 502 || e.status === 503 || e.status === 504);
 async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -90,6 +91,15 @@ export const api = {
     if (q.kql) s.set("kql", q.kql);
     return req<LogEvent[]>("GET", `${p(id)}/logs?${s}`);
   },
+  /** ADDENDA-011. 404 (route not deployed / no catalog) → empty roots; ARCHITECTURE_INVALID arrives as a warning. */
+  architecture: (id: string) =>
+    req<ArchitectureIndex>("GET", `${p(id)}/architecture`).catch((err) => {
+      if (err instanceof ApiError && err.status === 404) return { projectId: id, schemaVersion: 1, roots: [], warnings: [] } satisfies ArchitectureIndex;
+      throw err;
+    }),
+  /** 404 ARCHITECTURE_LAYER_NOT_FOUND / 503 ARCHITECTURE_INVALID surface as ApiError for the architecture view. */
+  architectureLayer: (id: string, layerId: string) =>
+    req<ArchitectureLayerResponse>("GET", `${p(id)}/architecture/layer?layerId=${e(layerId)}`),
   consoleStreamUrl: (id: string, appId: string) => `${API_BASE}${p(id)}/console/${e(appId)}/stream`,
   consoleStart: (id: string, appId: string) => req<{ attached: boolean }>("POST", `${p(id)}/console/${e(appId)}/start`),
   consoleStop: (id: string, appId: string) => req<{ attached: boolean }>("POST", `${p(id)}/console/${e(appId)}/stop`),
