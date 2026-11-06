@@ -31,7 +31,7 @@ const ZMIN = 0.2, ZMAX = 3;
 const BADGE_FONT = { font: "700 10px system-ui, sans-serif", letterSpacing: 0 };
 /** `.explore-pill text` (styles.css). */
 const PILL_FONT = { font: "600 11px system-ui, sans-serif", letterSpacing: 0 };
-const EXPLORE_TIP = "Explore architecture: responsibilities and data paths inside this container (static, not live)";
+const EXPLORE_TIP = "Explore architecture: responsibilities and data paths for this handler (static, not live)";
 
 /** Single palette for canvas + legend. */
 const PALETTE = {
@@ -283,8 +283,8 @@ export default function FlowTab() {
   }, [clearSelection]);
 
   const graph = useMemo(() => (data ? normalizeGraph(data) : null), [data]);
-  /** ADDENDA-011: root layer per container (Flow DTO opensLayerId, or the DEV fixture seam). Never changes `graph`. */
-  const architecture = useArchitecture(projectId, graph?.containers, graph?.warnings, demoMode);
+  /** ADDENDA-011.1: root layer per handler id (handler.opensLayerId / fixture seam). Never changes `graph`. */
+  const architecture = useArchitecture(projectId, graph?.nodes, graph?.warnings, demoMode);
   useEffect(() => { setArch(null); }, [projectId]);
   const openLayer = useCallback((layerId: string) => setArch({ layerId }), []);
   /**
@@ -297,7 +297,7 @@ export default function FlowTab() {
     setArch(null);
     clearArchCache();
     const ref = opts?.rootFlowRef ?? archViewState.current?.rootFlowRef ?? undefined;
-    const id = opts?.focus === "origin" ? (ref?.handlerId ?? ref?.containerId) : opts?.focus;
+    const id = opts?.focus === "origin" ? ref?.handlerId : opts?.focus;
     if (id && graph && (graph.containers.some((c) => c.id === id) || graph.nodes.some((n) => n.id === id))) setSelected(id);
   }, [clearArchCache, graph]);
   const inGraph = useCallback(
@@ -676,10 +676,7 @@ export default function FlowTab() {
     const statusW = c.app
       ? measureSvgText(c.app.attached ? "● attached" : "○ not attached", CONTAINER_SUB_FONT) + (agentText ? 8 + measureSvgText(agentText, CONTAINER_SUB_FONT) : 0)
       : 0;
-    // ADDENDA-011: Explore chip is purely additive. Compact / title / status use the SAME right-side budget as
-    // architecture-off (status only). Including the pill width here used to flip wide boxes into compact mode and
-    // wipe ".c1" titles + "○ not attached" (Tester FAIL B1 @ e43a7aa).
-    const root = architecture.roots.get(c.id);
+    // ADDENDA-011.1: Explore lives on handler items inside containers — never on the container header (B1 identity unchanged).
     const right = c.app ? statusW + 10 : 0;
     const label = fitSvgLabel(c.label, b.w - 20 - right, CONTAINER_FONT);
     // Narrow app box (label + attached + agent state don't fit): the header shows only the agent state icon and the
@@ -688,46 +685,15 @@ export default function FlowTab() {
     const attachedText = c.app?.attached ? "● attached" : "○ not attached";
     const icon = ag ?? STATE_GLYPH.unknown;
     const resources = `${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`;
-    // Place the Explore chip WITHOUT changing the title/status budget (Tester B1).
-    // Wide headers: labelled "Explore →" sits just under the header band in the container padding strip
-    // (additive; never ellipsizes .c1 / .c2). Genuinely compact headers (same as architecture-off):
-    // state icon + "→" arrow in the header row.
-    const fullPillW = Math.ceil(measureSvgText("Explore →", PILL_FONT)) + 14;
-    const arrowPillW = 22;
-    let pill: { w: number; x: number; y: number; text: string } | null = null;
-    if (root) {
-      if (compact) {
-        pill = { w: arrowPillW, x: b.w - 10 - 16 - 6 - arrowPillW, y: (HDR - 16) / 2, text: "→" };
-      } else {
-        pill = { w: fullPillW, x: 10, y: HDR + 3, text: "Explore →" };
-      }
-    }
-    /**
-     * Pill pointer rules: shift → let it bubble (the header's shift+click toggles the multi-selection); otherwise a
-     * button: no drag, no selection change, no position write; opens on a release within CLICK_SLOP.
-     */
-    const onPillDown = (e: React.PointerEvent) => {
-      if (e.shiftKey || e.button !== 0 || !root) return;
-      e.stopPropagation();
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY;
-      trackPointer(e.pointerId, null, (ev) => { if (ev.type === "pointerup" && isClick(sx, sy, ev)) openLayer(root.layerId); });
-    };
-    const onHeaderKey = (e: React.KeyboardEvent) => {
-      if (!root || isTypingTarget(e.target)) return;
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLayer(root.layerId); }
-    };
     return (
       <g
         key={c.id}
-        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}${root ? " has-architecture" : ""}`}
+        className={`container-box ${c.kind} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${compact ? "compact" : ""}`}
         data-id={c.id}
         data-selected={inSel ? "true" : undefined}
-        data-opens-layer={root?.layerId}
         transform={`translate(${b.x},${b.y})`}
         onPointerDown={(e) => beginDrag(e, c.id)}
         {...(compact ? { "data-label": c.label, "aria-label": c.label } : {})}
-        {...(root ? { tabIndex: 0, role: "button", "aria-label": `Explore architecture of ${c.label}`, onKeyDown: onHeaderKey } : {})}
       >
         <title>
           {compact
@@ -754,13 +720,6 @@ export default function FlowTab() {
             )}
           </text>
         )}
-        {pill && root && (
-          <g className="explore-pill" transform={`translate(${pill.x},${pill.y})`} onPointerDown={onPillDown} data-layer={root.layerId} data-label={pill.text}>
-            <title>{`${EXPLORE_TIP}\n${root.title}`}</title>
-            <rect width={pill.w} height={16} rx={8} />
-            <text x={pill.w / 2} y={11.5} textAnchor="middle">{pill.text}</text>
-          </g>
-        )}
       </g>
     );
   };
@@ -782,16 +741,31 @@ export default function FlowTab() {
     const actText = activity.nodeTitles.get(n.id);
     const badge = activity.nodeBadges.get(n.id);
     const rx = n.kind === "app" || n.kind === "handler" ? 8 : 3;
+    const root = n.kind === "handler" ? architecture.roots.get(n.id) : undefined;
+    const fullPillW = Math.ceil(measureSvgText("Explore →", PILL_FONT)) + 14;
+    const onPillDown = (e: React.PointerEvent) => {
+      if (e.shiftKey || e.button !== 0 || !root) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const sx = e.clientX, sy = e.clientY;
+      trackPointer(e.pointerId, null, (ev) => { if (ev.type === "pointerup" && isClick(sx, sy, ev)) openLayer(root.layerId); });
+    };
+    const onHandlerKey = (e: React.KeyboardEvent) => {
+      if (!root || isTypingTarget(e.target)) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLayer(root.layerId); }
+    };
     return (
       <g
         key={n.id}
         transform={`translate(${p.x},${p.y})`}
-        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}${act ? " " + act : ""}`}
+        className={`node ${n.kind} ${hot ? "hot" : ""} ${isSel ? "sel" : ""} ${inSel ? "selected" : ""} ${missing ? "missing" : ""}${act ? " " + act : ""}${root ? " has-architecture" : ""}`}
         data-id={n.id}
         data-selected={inSel ? "true" : undefined}
         data-activity={actText}
+        data-opens-layer={root?.layerId}
         onPointerDown={(e) => beginDrag(e, n.id)}
         style={{ cursor: "grab" }}
+        {...(root ? { tabIndex: 0, role: "button", "aria-label": `Explore architecture of ${n.label}`, onKeyDown: onHandlerKey } : {})}
       >
         <title>
           {n.kind === "blobContainer"
@@ -853,6 +827,13 @@ export default function FlowTab() {
             <title>{blobTooltip(blobs)}</title>
             <rect width={40} height={17} rx={8.5} />
             <text x={20} y={12.5} textAnchor="middle">▤ blob</text>
+          </g>
+        )}
+        {root && (
+          <g className="explore-pill" transform={`translate(${(W - fullPillW) / 2},${H + 4})`} onPointerDown={onPillDown} data-layer={root.layerId} data-label="Explore →">
+            <title>{`${EXPLORE_TIP}\n${root.title}`}</title>
+            <rect width={fullPillW} height={16} rx={8} />
+            <text x={fullPillW / 2} y={11.5} textAnchor="middle">Explore →</text>
           </g>
         )}
       </g>
@@ -1013,12 +994,6 @@ export default function FlowTab() {
                 <div className="muted">
                   {selContainer.id} · {selContainer.kind} container{selContainer.scope ? ` · scope ${selContainer.scope}` : ""}
                 </div>
-                {architecture.roots.get(selContainer.id) && (
-                  <p className="explore-line">
-                    Architecture: {architecture.roots.get(selContainer.id)!.title} ·{" "}
-                    <a href="#" onClick={(e) => { e.preventDefault(); openLayer(architecture.roots.get(selContainer.id)!.layerId); }} title={EXPLORE_TIP}>Explore →</a>
-                  </p>
-                )}
                 <p>
                   Resources: {selContainer.resourceRefs.length ? selContainer.resourceRefs.map((r) => <code key={r}>{r} </code>) : <span className="muted">none</span>}
                 </p>
@@ -1059,6 +1034,12 @@ export default function FlowTab() {
                     <code>{sel.app.cloudRoleName}</code>
                     <br />
                     {sel.app.attached ? "Console attached" : "Not attached"}
+                  </p>
+                )}
+                {architecture.roots.get(sel.id) && (
+                  <p className="explore-line">
+                    Architecture: {architecture.roots.get(sel.id)!.title} ·{" "}
+                    <a href="#" onClick={(e) => { e.preventDefault(); openLayer(architecture.roots.get(sel.id)!.layerId); }} title={EXPLORE_TIP}>Explore →</a>
                   </p>
                 )}
                 {sel.handler && (

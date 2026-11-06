@@ -1,10 +1,18 @@
-// ADDENDA-011 architecture view: pure helpers over the layer response. No React, no storage, no network.
+// ADDENDA-011 / 011.1 architecture view: pure helpers over the layer response. No React, no storage, no network.
 import type {
-  ArchCrumb, ArchEdge, ArchitectureLayerResponse, ArchitectureRoot, ArchLayer, ArchNode, ArchSource, FlowContainer,
+  ArchCrumb, ArchEdge, ArchitectureLayerResponse, ArchitectureRoot, ArchLayer, ArchNode, ArchSource, FlowNode,
 } from "../api/types";
 
 export const ARCHITECTURE_INVALID = "ARCHITECTURE_INVALID";
 export const ARCHITECTURE_LAYER_NOT_FOUND = "ARCHITECTURE_LAYER_NOT_FOUND";
+
+/** Retired container-root layerIds (ADDENDA-011.1). Ignore stored positions for these; never remap or delete keys. */
+export const RETIRED_LAYER_IDS = new Set([
+  "layer:customerproject.ingress-app",
+  "layer:customerproject.func-app",
+  "layer:price.ingress-app",
+  "layer:price.func-app",
+]);
 
 /** A crumb in the strip: the Flow anchor first, then the server's root … current. */
 export type Crumb = { kind: "flow"; title: string } | ({ kind: "layer" } & ArchCrumb);
@@ -69,10 +77,27 @@ export const edgeLabel = (e: ArchEdge) => `${RELATIONSHIP_PREFIX[e.relationship]
 export const hasInvalid = (warnings: readonly string[] | undefined) => !!warnings?.some((w) => w === ARCHITECTURE_INVALID || w.startsWith(ARCHITECTURE_INVALID + ":"));
 
 /**
- * Fixture seam: a COPY of the containers with `opensLayerId` set for every root whose flowRef.containerId exists in
- * the graph. Containers keep any opensLayerId they already had. The input array and its objects are never mutated.
+ * ADDENDA-011.1 fixture seam: COPY of Flow nodes with `handler.opensLayerId` set for every root whose
+ * flowRef.handlerId matches the node id. Nodes keep any opensLayerId they already had. Input never mutated.
+ * Containers are never decorated (no container Explore).
  */
-export function decorateContainers(containers: readonly FlowContainer[], roots: readonly ArchitectureRoot[]): FlowContainer[] {
-  const byContainer = new Map(roots.filter((r) => !r.flowRef.handlerId).map((r) => [r.flowRef.containerId, r.layerId]));
-  return containers.map((c) => (byContainer.has(c.id) && !c.opensLayerId ? { ...c, opensLayerId: byContainer.get(c.id) } : c));
+export function decorateHandlers(nodes: readonly FlowNode[], roots: readonly ArchitectureRoot[]): FlowNode[] {
+  const byHandler = new Map(
+    roots
+      .filter((r) => typeof r.flowRef?.handlerId === "string" && r.flowRef.handlerId)
+      .map((r) => [r.flowRef.handlerId!, r.layerId]),
+  );
+  return nodes.map((n) => {
+    if (n.kind !== "handler" || !byHandler.has(n.id)) return n;
+    const layerId = byHandler.get(n.id)!;
+    if (n.handler?.opensLayerId) return n;
+    return { ...n, handler: { ...(n.handler ?? { selfRequeue: [] }), opensLayerId: layerId } };
+  });
+}
+
+/** Resolve the architecture layer id a Flow handler opens (never container). */
+export function nodeOpensLayerId(n: FlowNode | undefined | null): string | undefined {
+  if (!n || n.kind !== "handler") return undefined;
+  const id = n.handler?.opensLayerId;
+  return typeof id === "string" && id && !RETIRED_LAYER_IDS.has(id) ? id : undefined;
 }
