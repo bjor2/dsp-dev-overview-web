@@ -26,6 +26,8 @@ export interface FlowContainer {
   positionSource?: "default" | "stored";
   /** Hint only; the UI recomputes from children + padding. Never sent by the API. */
   size?: { w: number; h: number };
+  /** ADDENDA-011: root architecture layer for this container. Absent when there is no valid layer. */
+  opensLayerId?: string;
 }
 /** OQ-1: self-requeue is a badge on the handler, not an edge. */
 export interface SelfRequeue { entityId: string; messages?: string[]; sources?: string[] }
@@ -42,6 +44,8 @@ export interface HandlerInfo {
   selfRequeue: SelfRequeue[];
   /** ADDENDA-009: every handler; timer-only handlers have no inbound edge and empty triggerEntityIds. */
   triggers?: HandlerTrigger[];
+  /** ADDENDA-011: handler-rooted architecture layer (read when present; no handler affordance in the first slice). */
+  opensLayerId?: string;
 }
 export interface FlowNode {
   id: string; kind: NodeKind; label: string; scope: Scope;
@@ -128,6 +132,56 @@ export interface LogEvent {
   durationMs?: number; success?: boolean; details?: Record<string, unknown>; traceItUrl?: string;
 }
 export interface ConsoleChunk { appId: string; seq: number; timestamp: string; stream: "stdout" | "stderr" | "system"; lines: string[]; attached: boolean }
+
+/** ADDENDA-011: architecture catalog, separate from registration schema (schemaVersion 1 ≠ registration v2/v3). */
+export type ArchSourceKind = "repo" | "confluence" | "registration" | "inferred";
+export type ArchConfidence = "confirmed" | "inferred" | "uncertain";
+export interface ArchSource { kind: ArchSourceKind; ref: string; note?: string; confidence: ArchConfidence; revision?: string }
+export type ArchNodeKind = "component" | "store" | "contract" | "external";
+export interface ArchNode {
+  /** comp:<project>.<path> */
+  id: string;
+  label: string; kind: ArchNodeKind; responsibility: string;
+  /** outside = outside this compute boundary, NOT "another team". */
+  boundary: "inside" | "outside";
+  /** Explanatory only. */
+  owner?: string;
+  /** Inside components only; drill one layer deeper. */
+  opensLayerId?: string;
+  /** Reference to an existing Flow entity; enables "View in Flow". Not a second runtime entity. */
+  flowEntityId?: string;
+  sources: ArchSource[]; uncertainties: string[];
+}
+export interface ArchEdge {
+  /** aedge:<project>.<path> */
+  id: string;
+  from: string; to: string; kind: "conceptual";
+  relationship: "message" | "data" | "dependency";
+  label: string; description: string;
+  sources: ArchSource[]; uncertainties: string[];
+}
+export interface ArchFlowRef { containerId: string; handlerId?: string }
+export interface ArchLayer {
+  schemaVersion: 1; documentType: "architecture-layer";
+  id: string; project: string; title: string; summary: string;
+  /** flowRef only on roots. */
+  parentLayerId: string | null; flowRef?: ArchFlowRef;
+  scope: Scope; reviewedAt: string;
+  sources: ArchSource[]; uncertainties: string[];
+  nodes: ArchNode[]; edges: ArchEdge[];
+}
+export interface ArchitectureRoot { layerId: string; title: string; flowRef: ArchFlowRef }
+export interface ArchitectureIndex { projectId: string; schemaVersion: 1; roots: ArchitectureRoot[]; warnings: string[]; /** Optional content fingerprint of the packaged catalog (sha256:…). */ catalogHash?: string }
+export interface ArchCrumb { layerId: string; title: string }
+export interface ArchChild { layerId: string; title: string; openedByNodeId: string }
+export interface ArchitectureLayerResponse {
+  projectId: string; schemaVersion: 1; layer: ArchLayer; rootFlowRef: ArchFlowRef;
+  /** Root … current, inclusive; the UI prepends the Flow crumb. */
+  breadcrumbs: ArchCrumb[];
+  /** Direct children, sorted by layerId. */
+  children: ArchChild[];
+  warnings: string[];
+}
 
 export interface ApiErrorBody { error: { code: string; message: string; retryable: boolean } }
 

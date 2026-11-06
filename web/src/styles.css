@@ -247,3 +247,94 @@ circle.activity-dot { fill: #2563eb; stroke: #fff; stroke-width: 1.5; pointer-ev
 .legend-activity.failed { background: #fee2e2; }
 .legend-activity.succeeded { border-color: #16a34a; }
 .legend-activity.executing { border-style: dashed; }
+
+/* ADDENDA-011 architecture drill-down (DESIGN-flow-drilldown.md). Everything is scoped under svg.architecture /
+   .architecture-* / .explore-pill and never reuses .node, .edge or activity-*. Nothing here animates. */
+.flow-wrap[hidden] { display: none; }
+svg.flow .container-box .explore-pill { cursor: pointer; pointer-events: all; }
+svg.flow .container-box .explore-pill rect { fill: #ffffff; stroke: #1e3a8a; stroke-width: 1; }
+svg.flow .container-box .explore-pill text { fill: #1e3a8a; font: 600 11px system-ui, sans-serif; pointer-events: none; }
+svg.flow .container-box .explore-pill:hover rect { fill: #1e3a8a; }
+svg.flow .container-box .explore-pill:hover text { fill: #ffffff; }
+svg.flow .container-box.has-architecture { outline: none; }
+svg.flow .container-box.has-architecture:focus-visible path.hdr { stroke: #2563eb; stroke-width: 2; }
+svg.flow .container-box.has-architecture:focus-visible rect.box { stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: none; }
+.side-panel .explore-line { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 5px; padding: 4px 8px; font-size: 12px; }
+.arch-fixtures-note { white-space: nowrap; border: 1px dashed #cbd5e1; border-radius: 9px; padding: 0 6px; }
+
+.architecture-mode { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.architecture-toolbar { flex-wrap: nowrap; }
+.architecture-crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.architecture-crumbs nav { min-width: 0; overflow: hidden; flex: 0 1 auto; }
+.architecture-crumbs ol { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 2px; white-space: nowrap; }
+.architecture-crumbs li { display: flex; align-items: center; flex: 0 0 auto; }
+.architecture-crumbs > button { flex: none; }
+.architecture-crumbs li button { padding: 2px 6px; color: #1d4ed8; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+.architecture-crumbs li.arch-crumb-flow button { font-weight: 600; }
+.architecture-crumbs li.current span[aria-current] { font-weight: 700; color: #1e3a8a; padding: 2px 6px; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.architecture-crumbs .arch-crumb-sep { color: #94a3b8; margin: 0 2px; }
+.architecture-wrap { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 8px; align-items: stretch; }
+.architecture-canvas { position: relative; min-width: 0; min-height: 0; }
+svg.architecture { width: 100%; height: 100%; background: #fbfcfe; border: 1px solid #c7d2fe; border-radius: 6px; touch-action: none; user-select: none; cursor: default; display: block; }
+svg.architecture .arch-boundary { fill: #1e3a8a0f; stroke: #1e3a8a; stroke-width: 2; pointer-events: none; }
+svg.architecture .arch-boundary-title { fill: #1e3a8a; font: 700 12px system-ui, sans-serif; }
+svg.architecture .arch-node { cursor: default; }
+svg.architecture .arch-node.arch-opener { cursor: pointer; }
+svg.architecture .arch-node { outline: none; }
+svg.architecture .arch-node .arch-shape { fill: #ffffff; stroke: #1e3a8a; stroke-width: 1.4; }
+svg.architecture .arch-node.arch-kind-store .arch-shape { fill: #f1f5f9; stroke: #475569; }
+svg.architecture .arch-node.arch-kind-contract .arch-shape { fill: #fefce8; stroke: #a16207; }
+svg.architecture .arch-node.arch-kind-external .arch-shape { fill: #fff4e0; stroke: #d39b3a; stroke-dasharray: 4 3; }
+svg.architecture .arch-node .arch-cue { fill: none; stroke: #94a3b8; stroke-width: 1; }
+svg.architecture .arch-node.arch-kind-contract .arch-cue { stroke: #a16207; }
+svg.architecture .arch-node.arch-selected .arch-shape { stroke: #2563eb; stroke-width: 2.5; }
+svg.architecture .arch-node:focus-visible .arch-shape { stroke: #2563eb; stroke-width: 2.5; }
+svg.architecture .arch-t1 { fill: #0f172a; font: 600 12px system-ui, sans-serif; pointer-events: none; }
+svg.architecture .arch-t2 { fill: #475569; font-size: 10.5px; pointer-events: none; }
+svg.architecture .arch-explore-chip rect { fill: #1e3a8a; stroke: none; }
+svg.architecture .arch-explore-chip text { fill: #ffffff; font: 600 9.5px system-ui, sans-serif; pointer-events: none; }
+svg.architecture .arch-warn { fill: #b45309; font-weight: 700; }
+svg.architecture .arch-node-warn { font-size: 12px; }
+svg.architecture .arch-edge { fill: none; stroke: #94a3b8; stroke-width: 1.3; stroke-dasharray: 5 4; pointer-events: stroke; cursor: pointer; }
+svg.architecture .arch-edge-group.arch-selected .arch-edge { stroke: #2563eb; stroke-width: 2; }
+svg.architecture .arch-arrow { fill: #94a3b8; }
+svg.architecture .arch-edge-label { fill: #475569; font: 10.5px system-ui, sans-serif; paint-order: stroke; stroke: #fbfcfe; stroke-width: 4px; stroke-linejoin: round; cursor: pointer; }
+svg.architecture .arch-edge-label.arch-selected { fill: #1d4ed8; font-weight: 600; }
+.architecture-overlay { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: #ffffffee; border: 1px solid #c7d2fe; border-radius: 6px; padding: 10px 14px; color: #334155; display: flex; gap: 8px; align-items: center; }
+.architecture-overlay.arch-error { border-color: #d97706; background: #fffbeb; }
+.architecture-legend { position: absolute; left: 10px; bottom: 10px; max-width: 420px; background: #ffffffee; border: 1px solid #dde3ea; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #334155; box-shadow: 0 1px 3px #0001; }
+.architecture-legend .legend-toggle { padding: 2px 4px; font-size: 11px; font-weight: 600; }
+.architecture-legend-body > div { display: flex; align-items: center; gap: 6px; line-height: 16px; margin: 1px 0; }
+.architecture-legend-body > div > svg { flex: none; }
+.architecture-legend-swatch .sw-component { fill: #fff; stroke: #1e3a8a; stroke-width: 1.4; }
+.architecture-legend-swatch .sw-store { fill: #f1f5f9; stroke: #475569; }
+.architecture-legend-swatch .sw-contract { fill: #fefce8; stroke: #a16207; }
+.architecture-legend-swatch .sw-external { fill: #fff4e0; stroke: #d39b3a; stroke-dasharray: 4 3; }
+.architecture-legend-swatch .sw-boundary { fill: #1e3a8a0f; stroke: #1e3a8a; stroke-width: 2; }
+.architecture-legend .sw-edge { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.architecture-legend .arch-explore-chip-legend { background: #1e3a8a; color: #fff; border-radius: 8px; padding: 0 6px; font-size: 9.5px; font-weight: 600; }
+.architecture-legend .arch-warn { color: #b45309; font-weight: 700; }
+.architecture-panel { font-size: 12.5px; }
+.architecture-panel .arch-section { border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px; }
+.architecture-panel .arch-section:last-child { border-bottom: 0; }
+.architecture-panel h4 { margin: 2px 0 2px; }
+.architecture-panel h5 { margin: 10px 0 4px; font-size: 12px; color: #334155; }
+.architecture-panel .arch-summary { margin: 6px 0; }
+.architecture-panel .arch-static-note { font-style: italic; }
+.architecture-panel ul { margin: 2px 0; padding-left: 16px; }
+.architecture-panel .arch-uncertainties { list-style: none; padding-left: 0; }
+.architecture-panel .arch-uncertainties li { background: #fffbeb; border-left: 3px solid #d97706; padding: 3px 6px; margin: 3px 0; color: #78350f; }
+.architecture-panel .arch-warn { color: #b45309; font-weight: 700; }
+.architecture-panel .arch-warnings code { color: #92400e; }
+.architecture-panel .arch-sources { list-style: none; padding-left: 0; }
+.architecture-panel .arch-source { border: 1px solid #e2e8f0; border-radius: 5px; padding: 4px 6px; margin: 4px 0; }
+.architecture-panel .arch-source-kind { font-size: 10.5px; color: #475569; margin: 0 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+.architecture-panel .arch-revision { font: 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #64748b; }
+.architecture-panel .arch-ref { overflow-wrap: anywhere; margin-top: 2px; }
+.architecture-panel .arch-ref code { font-size: 11px; }
+.architecture-panel .arch-note { color: #475569; font-size: 11.5px; margin-top: 2px; }
+.architecture-panel .confidence-pill { display: inline-block; border-radius: 9px; padding: 0 6px; font-size: 10px; font-weight: 600; line-height: 15px; border: 1px solid; }
+.architecture-panel .confidence-confirmed { background: #f1f5f9; border-color: #64748b; color: #334155; }
+.architecture-panel .confidence-inferred { background: #fef3c7; border-color: #d97706; color: #92400e; }
+.architecture-panel .confidence-uncertain { background: #fef3c7; border-color: #d97706; border-style: dashed; color: #92400e; }
+.architecture-panel .arch-flow-chip, .architecture-panel .arch-open-child { font-size: 11px; padding: 1px 8px; }
