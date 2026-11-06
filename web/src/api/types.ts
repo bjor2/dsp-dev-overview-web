@@ -171,7 +171,7 @@ export interface ArchLayer {
   nodes: ArchNode[]; edges: ArchEdge[];
 }
 export interface ArchitectureRoot { layerId: string; title: string; flowRef: ArchFlowRef }
-export interface ArchitectureIndex { projectId: string; schemaVersion: 1; roots: ArchitectureRoot[]; warnings: string[] }
+export interface ArchitectureIndex { projectId: string; schemaVersion: 1; roots: ArchitectureRoot[]; warnings: string[]; /** Optional content fingerprint of the packaged catalog (sha256:…). */ catalogHash?: string }
 export interface ArchCrumb { layerId: string; title: string }
 export interface ArchChild { layerId: string; title: string; openedByNodeId: string }
 export interface ArchitectureLayerResponse {

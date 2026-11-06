@@ -30,7 +30,7 @@ const ZMIN = 0.2, ZMAX = 3;
 /** `.activity-badge text` (styles.css). */
 const BADGE_FONT = { font: "700 10px system-ui, sans-serif", letterSpacing: 0 };
 /** `.explore-pill text` (styles.css). */
-const PILL_FONT = { font: "600 10px system-ui, sans-serif", letterSpacing: 0 };
+const PILL_FONT = { font: "600 11px system-ui, sans-serif", letterSpacing: 0 };
 const EXPLORE_TIP = "Explore architecture: responsibilities and data paths inside this container (static, not live)";
 
 /** Single palette for canvas + legend. */
@@ -676,10 +676,11 @@ export default function FlowTab() {
     const statusW = c.app
       ? measureSvgText(c.app.attached ? "● attached" : "○ not attached", CONTAINER_SUB_FONT) + (agentText ? 8 + measureSvgText(agentText, CONTAINER_SUB_FONT) : 0)
       : 0;
-    // ADDENDA-011: "Explore →" pill before the status text, only when the container has a root layer.
+    // ADDENDA-011: Explore chip is purely additive. Compact / title / status use the SAME right-side budget as
+    // architecture-off (status only). Including the pill width here used to flip wide boxes into compact mode and
+    // wipe ".c1" titles + "○ not attached" (Tester FAIL B1 @ e43a7aa).
     const root = architecture.roots.get(c.id);
-    const pillW = root ? Math.ceil(measureSvgText("Explore →", PILL_FONT)) + 14 : 0;
-    const right = (c.app ? statusW + 10 : 0) + (root ? pillW + 8 : 0);
+    const right = c.app ? statusW + 10 : 0;
     const label = fitSvgLabel(c.label, b.w - 20 - right, CONTAINER_FONT);
     // Narrow app box (label + attached + agent state don't fit): the header shows only the agent state icon and the
     // full name, port, attached flag and agent state move to the tooltip.
@@ -687,12 +688,20 @@ export default function FlowTab() {
     const attachedText = c.app?.attached ? "● attached" : "○ not attached";
     const icon = ag ?? STATE_GLYPH.unknown;
     const resources = `${c.kind} container (${c.resourceRefs.join(", ") || "no resources"}) · drag the header to move it with its nodes`;
-    // Compact boxes show only "→" left of the state icon; otherwise the full pill left of "● attached …".
-    const pill = root
-      ? compact
-        ? { w: 22, x: b.w - 10 - 16 - 6 - 22, text: "→" }
-        : { w: pillW, x: b.w - 10 - (c.app ? statusW + 8 : 0) - pillW, text: "Explore →" }
-      : null;
+    // Place the Explore chip WITHOUT changing the title/status budget (Tester B1).
+    // Wide headers: labelled "Explore →" sits just under the header band in the container padding strip
+    // (additive; never ellipsizes .c1 / .c2). Genuinely compact headers (same as architecture-off):
+    // state icon + "→" arrow in the header row.
+    const fullPillW = Math.ceil(measureSvgText("Explore →", PILL_FONT)) + 14;
+    const arrowPillW = 22;
+    let pill: { w: number; x: number; y: number; text: string } | null = null;
+    if (root) {
+      if (compact) {
+        pill = { w: arrowPillW, x: b.w - 10 - 16 - 6 - arrowPillW, y: (HDR - 16) / 2, text: "→" };
+      } else {
+        pill = { w: fullPillW, x: 10, y: HDR + 3, text: "Explore →" };
+      }
+    }
     /**
      * Pill pointer rules: shift → let it bubble (the header's shift+click toggles the multi-selection); otherwise a
      * button: no drag, no selection change, no position write; opens on a release within CLICK_SLOP.
@@ -746,7 +755,7 @@ export default function FlowTab() {
           </text>
         )}
         {pill && root && (
-          <g className="explore-pill" transform={`translate(${pill.x},${(HDR - 16) / 2})`} onPointerDown={onPillDown} data-layer={root.layerId}>
+          <g className="explore-pill" transform={`translate(${pill.x},${pill.y})`} onPointerDown={onPillDown} data-layer={root.layerId} data-label={pill.text}>
             <title>{`${EXPLORE_TIP}\n${root.title}`}</title>
             <rect width={pill.w} height={16} rx={8} />
             <text x={pill.w / 2} y={11.5} textAnchor="middle">{pill.text}</text>

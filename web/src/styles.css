@@ -251,9 +251,9 @@ circle.activity-dot { fill: #2563eb; stroke: #fff; stroke-width: 1.5; pointer-ev
 /* ADDENDA-011 architecture drill-down (DESIGN-flow-drilldown.md). Everything is scoped under svg.architecture /
    .architecture-* / .explore-pill and never reuses .node, .edge or activity-*. Nothing here animates. */
 .flow-wrap[hidden] { display: none; }
-svg.flow .container-box .explore-pill { cursor: pointer; }
+svg.flow .container-box .explore-pill { cursor: pointer; pointer-events: all; }
 svg.flow .container-box .explore-pill rect { fill: #ffffff; stroke: #1e3a8a; stroke-width: 1; }
-svg.flow .container-box .explore-pill text { fill: #1e3a8a; font: 600 10px system-ui, sans-serif; pointer-events: none; }
+svg.flow .container-box .explore-pill text { fill: #1e3a8a; font: 600 11px system-ui, sans-serif; pointer-events: none; }
 svg.flow .container-box .explore-pill:hover rect { fill: #1e3a8a; }
 svg.flow .container-box .explore-pill:hover text { fill: #ffffff; }
 svg.flow .container-box.has-architecture { outline: none; }

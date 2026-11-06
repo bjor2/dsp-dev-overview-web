@@ -31,6 +31,7 @@ const normIndex = (ix: ArchitectureIndex | null | undefined, projectId: string):
     (r): r is ArchitectureRoot => !!r && typeof r.layerId === "string" && !!r.flowRef && typeof r.flowRef.containerId === "string",
   ),
   warnings: Array.isArray(ix?.warnings) ? ix.warnings.filter((w): w is string => typeof w === "string") : [],
+  ...(typeof ix?.catalogHash === "string" && ix.catalogHash ? { catalogHash: ix.catalogHash } : {}),
 });
 
 /**
