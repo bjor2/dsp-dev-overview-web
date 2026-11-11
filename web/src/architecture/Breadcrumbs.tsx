@@ -19,10 +19,10 @@ export default function Breadcrumbs({ crumbs, onFlow, onOpen, onUp, onViewInFlow
               <li key={key} className={`arch-crumb arch-crumb-${c.kind}${current ? " current" : ""}`} data-layer={c.kind === "layer" ? c.layerId : undefined}>
                 {i > 0 && <span className="arch-crumb-sep" aria-hidden="true">›</span>}
                 {current ? (
-                  <span aria-current="page">{c.title}</span>
+                  <span aria-current="page" title={c.title}>{c.title}</span>
                 ) : (
                   <button type="button" className="ghost" onClick={() => (c.kind === "flow" ? onFlow() : onOpen(c.layerId))}
-                    title={c.kind === "flow" ? "Back to Flow (pan, zoom and selection unchanged)" : c.layerId}>
+                    title={c.kind === "flow" ? "Back to Flow (pan, zoom and selection unchanged)" : `${c.title}\n${c.layerId}`}>
                     {c.title}
                   </button>
                 )}
