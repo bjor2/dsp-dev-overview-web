@@ -264,10 +264,10 @@ svg.flow .container-box.has-architecture:focus-visible rect.box { stroke: #2563e
 .arch-fixtures-note { white-space: nowrap; border: 1px dashed #cbd5e1; border-radius: 9px; padding: 0 6px; }
 
 .architecture-mode { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.architecture-toolbar { flex-wrap: nowrap; }
+.architecture-toolbar { flex-wrap: wrap; }
 .architecture-crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .architecture-crumbs nav { min-width: 0; overflow: hidden; flex: 0 1 auto; }
-.architecture-crumbs ol { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 2px; white-space: nowrap; }
+.architecture-crumbs ol { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 2px; flex-wrap: wrap; white-space: normal; }
 .architecture-crumbs li { display: flex; align-items: center; flex: 0 0 auto; }
 .architecture-crumbs > button { flex: none; }
 .architecture-crumbs li button { padding: 2px 6px; color: #1d4ed8; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
