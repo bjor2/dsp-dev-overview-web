@@ -267,12 +267,12 @@ svg.flow .container-box.has-architecture:focus-visible rect.box { stroke: #2563e
 .architecture-toolbar { flex-wrap: wrap; }
 .architecture-crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .architecture-crumbs nav { min-width: 0; overflow: hidden; flex: 0 1 auto; }
-.architecture-crumbs ol { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 2px; flex-wrap: wrap; white-space: normal; }
-.architecture-crumbs li { display: flex; align-items: center; flex: 0 0 auto; }
+.architecture-crumbs ol { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 2px; flex-wrap: wrap; }
+.architecture-crumbs li { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; max-width: 100%; }
 .architecture-crumbs > button { flex: none; }
-.architecture-crumbs li button { padding: 2px 6px; color: #1d4ed8; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+.architecture-crumbs li button { padding: 2px 6px; color: #1d4ed8; min-width: 0; max-width: min(26ch, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .architecture-crumbs li.arch-crumb-flow button { font-weight: 600; }
-.architecture-crumbs li.current span[aria-current] { font-weight: 700; color: #1e3a8a; padding: 2px 6px; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.architecture-crumbs li.current span[aria-current] { font-weight: 700; color: #1e3a8a; padding: 2px 6px; min-width: 0; max-width: min(40ch, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .architecture-crumbs .arch-crumb-sep { color: #94a3b8; margin: 0 2px; }
 .architecture-wrap { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 8px; align-items: stretch; }
 .architecture-canvas { position: relative; min-width: 0; min-height: 0; }
